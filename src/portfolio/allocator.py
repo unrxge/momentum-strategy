@@ -141,34 +141,15 @@ def build_target_allocation(
 
     if regime == "healthy":
         # Growth assets: inverse-vol weighted, scaled to 80%
+        # Position limits are NOT applied here to preserve the inverse-vol ratio
+        # (they only apply when rebalancing between multiple assets)
         if top_growth:
-            growth_data = {t: price_data[t] for t in top_growth if t in price_data}
             growth_weights_raw = calculate_inverse_vol_weights(top_growth, price_data)
 
             # Scale to 80% of portfolio
             growth_weights_scaled = {t: w * 0.80 for t, w in growth_weights_raw.items()}
 
-            # Apply position limits within the growth sleeve
-            # Cap any weight > 40% and redistribute excess among uncapped weights
-            growth_weights_limited = {}
-            total_excess = 0
-
             for ticker, weight in growth_weights_scaled.items():
-                if weight > 0.40:
-                    growth_weights_limited[ticker] = 0.40
-                    total_excess += weight - 0.40
-                else:
-                    growth_weights_limited[ticker] = weight
-
-            # Redistribute excess among non-capped assets (preserve sleeve total)
-            if total_excess > 0:
-                uncapped = [t for t, w in growth_weights_scaled.items() if w <= 0.40]
-                if uncapped:
-                    per_asset = total_excess / len(uncapped)
-                    for t in uncapped:
-                        growth_weights_limited[t] += per_asset
-
-            for ticker, weight in growth_weights_limited.items():
                 allocation[ticker] = {
                     "weight": weight,
                     "gbp_amount": weight * portfolio_value
