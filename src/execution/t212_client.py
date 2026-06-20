@@ -83,12 +83,19 @@ class T212Client:
         Calls GET /equity/account/cash
 
         Returns:
-            Raw response dict with cash balance details
-            (fields: free, total, ppl, result, invested, blocked, etc.)
+            Dict with cash balance details including free, total, invested, etc.
         """
         try:
             response = self._request("GET", "equity/account/cash")
-            return response
+            return {
+                "free_cash": response.get("free", 0),
+                "total_cash": response.get("total", 0),
+                "invested_cash": response.get("invested", 0),
+                "blocked_cash": response.get("blocked", 0),
+                "profit_loss": response.get("ppl", 0),
+                "result": response.get("result", 0),
+                "raw_response": response,
+            }
         except ValueError as e:
             if "401" in str(e):
                 print("\n⚠️  401 Authentication Error — Known T212 Beta Issue")
@@ -105,10 +112,14 @@ class T212Client:
         Calls GET /equity/account/info
 
         Returns:
-            Dict with account_id, currency, and other account metadata
+            Dict with id (account ID), currencyCode, and other account metadata
         """
         response = self._request("GET", "equity/account/info")
-        return response
+        return {
+            "account_id": response.get("id"),
+            "currency": response.get("currencyCode", "GBP"),
+            "raw_response": response,
+        }
 
     def get_current_positions(self) -> dict[str, dict]:
         """
