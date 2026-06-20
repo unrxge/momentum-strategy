@@ -49,9 +49,11 @@ def format_rebalance_message(
     defensive_rankings: list[tuple[str, float]],
     trade_list: list[dict],
     selected_growth: list[str] = None,
+    is_simulated: bool = False,
+    reason: str = "",
 ) -> str:
     """
-    Format a rebalance notification message for Telegram.
+    Format a rebalance action notification message for Telegram.
 
     Args:
         environment: "DEMO" or "LIVE"
@@ -62,6 +64,8 @@ def format_rebalance_message(
         defensive_rankings: List of (ticker, momentum) tuples
         trade_list: List of trade instructions
         selected_growth: List of selected growth ticker names
+        is_simulated: Whether this is from a simulated test
+        reason: Plain-English reason for the rebalance
 
     Returns:
         Formatted message string
@@ -70,7 +74,11 @@ def format_rebalance_message(
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     regime_display = "Healthy" if regime == "healthy" else "Unhealthy"
 
-    message = f"""🔔 MONTHLY REBALANCE — ACTION NEEDED
+    source = "🔴 SOURCE: SIMULATED TEST DATA" if is_simulated else "🟢 SOURCE: LIVE MARKET DATA"
+
+    message = f"""{source}
+
+🔔 MONTHLY REBALANCE — ACTION NEEDED
 
 Date: {today}
 Environment: {environment}
@@ -90,17 +98,101 @@ TOP GROWTH (12-month momentum):
     for ticker, momentum in defensive_rankings:
         message += f"  {ticker}: {momentum * 100:+.2f}%\n"
 
+    message += "\nWHY THESE TRADES:\n"
+    message += f"  {reason}\n" if reason else "  Rebalancing to target allocation.\n"
+
     message += "\nPROPOSED TRADES:\n"
-    if trade_list:
-        for trade in trade_list:
-            ticker = trade["ticker"]
-            action = trade["action"]
-            amount = trade["amount_gbp"]
-            message += f"  {action:<6} {ticker:<10} £{amount:>10.2f}\n"
-    else:
-        message += "  (No trades needed)\n"
+    for trade in trade_list:
+        ticker = trade["ticker"]
+        action = trade["action"]
+        amount = trade["amount_gbp"]
+        message += f"  {action:<6} {ticker:<10} £{amount:>10.2f}\n"
 
     message += "\nReply YES to execute, or NO to skip this cycle."
+
+    return message
+
+
+def format_no_action_needed_message(
+    environment: str,
+    account_value: float,
+    regime: str,
+    fast_crash_triggered: bool,
+    circuit_breaker_triggered: bool,
+    drawdown_pct: float,
+    target_allocation: dict[str, dict],
+    current_positions: dict[str, dict],
+    reason: str = "",
+    check_type: str = "MONTHLY",
+    next_check_date: str = "",
+    is_simulated: bool = False,
+) -> str:
+    """
+    Format a "no action needed" notification for Telegram.
+
+    Args:
+        environment: "DEMO" or "LIVE"
+        account_value: Current account value in GBP
+        regime: "healthy" or "unhealthy"
+        fast_crash_triggered: Whether fast-crash alert is active
+        circuit_breaker_triggered: Whether circuit breaker is active
+        drawdown_pct: Current drawdown from peak (0-100)
+        target_allocation: Target allocation dict {ticker: {weight, gbp_amount}}
+        current_positions: Current positions dict {ticker: {quantity, current_value, ...}}
+        reason: Plain-English reason why no action is needed
+        check_type: "MONTHLY" or "WEEKLY"
+        next_check_date: When the next check is scheduled
+        is_simulated: Whether this is from a simulated test
+
+    Returns:
+        Formatted message string
+    """
+    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    regime_display = "Healthy" if regime == "healthy" else "Unhealthy"
+    source = "🔴 SOURCE: SIMULATED TEST DATA" if is_simulated else "🟢 SOURCE: LIVE MARKET DATA"
+
+    message = f"""{source}
+
+✅ {check_type} CHECK COMPLETE — NO ACTION NEEDED
+
+Date: {today}
+Environment: {environment}"""
+
+    if check_type == "MONTHLY":
+        message += f"\nAccount Value: £{account_value:.2f}"
+
+    message += f"""
+
+REGIME: {regime_display}
+Fast-Crash Triggered: {"Yes" if fast_crash_triggered else "No"}
+Circuit Breaker: {"Triggered" if circuit_breaker_triggered else "Not triggered"}
+Drawdown from peak: {drawdown_pct:.2f}%
+
+WHY NO ACTION:
+  {reason if reason else "Positions are within tolerance of target allocation."}
+"""
+
+    # For monthly checks, show the detailed table
+    if check_type == "MONTHLY" and target_allocation:
+        message += "\nPOSITION AUDIT (Target vs Actual):\n"
+        message += "Ticker       Target      Actual      Difference\n"
+        message += "-" * 50 + "\n"
+
+        for ticker, target_data in target_allocation.items():
+            if ticker == "CASH":
+                continue
+
+            target_amount = target_data["gbp_amount"]
+            current_pos = current_positions.get(ticker, {})
+            actual_value = current_pos.get("current_value", 0)
+            difference = actual_value - target_amount
+
+            message += f"{ticker:<12} £{target_amount:>8.2f}  £{actual_value:>8.2f}  £{difference:>8.2f}\n"
+
+    if next_check_date:
+        message += f"\nNext check: {next_check_date}"
+    else:
+        message += "\nNo reply needed."
 
     return message
 

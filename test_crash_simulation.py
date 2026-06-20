@@ -9,9 +9,11 @@ execution pipeline without waiting for a real market crash signal.
 This tests the EXECUTION path, not the signal math.
 """
 
+import os
 from datetime import datetime
 from src.execution.t212_client import T212Client
 from src.execution.trade_generator import generate_trade_list
+from src.execution.telegram_notifier import format_rebalance_message, send_message
 from src.data.price_fetcher import fetch_price_history
 from src.signals.regime import check_regime
 from src.signals.momentum import rank_growth_assets, rank_defensive_assets, select_top_growth
@@ -149,6 +151,49 @@ if not trades:
     log_event("⚠️  No trades generated (already at target allocation)")
     print("\nNo trades to execute. Exiting.")
     exit(0)
+
+print("\n" + "=" * 90)
+print("[STEP 4b] FORMAT TELEGRAM NOTIFICATION")
+print("=" * 90)
+
+log_event("Formatting Telegram notification...")
+try:
+    # Get growth rankings for the notification
+    growth_data = {t: price_data[t] for t in GROWTH_TICKERS if t in price_data}
+    ranked_growth = rank_growth_assets(growth_data)
+
+    # Format the crash scenario message
+    telegram_message = format_rebalance_message(
+        environment=os.getenv("ENVIRONMENT", "DEMO").upper(),
+        account_value=portfolio_value,
+        regime=regime,
+        fast_crash_triggered=fast_crash_triggered,
+        growth_rankings=ranked_growth,
+        defensive_rankings=ranked_defensive,
+        trade_list=trades,
+        selected_growth=[],  # No growth selected in crash scenario
+        is_simulated=True,  # Mark as simulated test
+        reason="SIMULATED CRASH TEST — fast_crash_triggered manually forced for execution testing",
+    )
+
+    log_event("Telegram message formatted")
+    print("\nTelegram Message Preview:")
+    print("-" * 90)
+    print(telegram_message)
+    print("-" * 90)
+
+    # Optional: Send the message
+    send_msg = input("\nSend this message to Telegram? (yes/no): ").strip().lower()
+    if send_msg == "yes":
+        if send_message(telegram_message):
+            log_event("✅ Telegram message sent")
+        else:
+            log_event("⚠️  Failed to send Telegram message (check token/chat ID)")
+    else:
+        log_event("⏭️  Skipped sending Telegram message")
+
+except Exception as e:
+    log_event(f"⚠️  Failed to format Telegram message: {e}")
 
 print("\n" + "=" * 90)
 print("[STEP 5] SUBMIT ORDERS TO T212 — REAL EXECUTION")
