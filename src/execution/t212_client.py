@@ -83,13 +83,14 @@ class T212Client:
         Returns:
             Dict with keys: balance, currency, cash, account_id, etc.
         """
-        response = self._request("GET", "equity/account/info")
+        response = self._request("GET", "account/cash")
 
         return {
-            "balance": response.get("balance", 0),
+            "balance": response.get("investedCash", 0) + response.get("freeCash", 0),
+            "invested_cash": response.get("investedCash", 0),
+            "free_cash": response.get("freeCash", 0),
             "currency": response.get("currency", "GBP"),
-            "cash": response.get("cash", 0),
-            "account_id": response.get("accountId"),
+            "cash": response.get("freeCash", 0),
             "raw_response": response,
         }
 
@@ -100,16 +101,17 @@ class T212Client:
         Returns:
             Dict of {ticker: {quantity, current_value, avg_price}}
         """
-        response = self._request("GET", "equity/portfolio/positions")
+        response = self._request("GET", "portfolio/open-positions")
 
         positions = {}
-        for position in response.get("positions", []):
+        for position in response if isinstance(response, list) else response.get("positions", []):
             ticker = position.get("ticker")
             if ticker:
                 positions[ticker] = {
-                    "quantity": position.get("quantity", 0),
-                    "current_value": position.get("currentValue", 0),
-                    "avg_price": position.get("avgPrice", 0),
+                    "quantity": float(position.get("quantity", 0)),
+                    "current_value": float(position.get("currentPrice", 0)) * float(position.get("quantity", 0)),
+                    "current_price": float(position.get("currentPrice", 0)),
+                    "avg_price": float(position.get("averagePrice", 0)),
                     "raw_position": position,
                 }
 
