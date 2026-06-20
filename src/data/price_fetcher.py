@@ -1,17 +1,19 @@
 """Price data fetching module using yfinance."""
 
 import time
+import random
 import pandas as pd
 import yfinance as yf
 
 
-def fetch_price_history(ticker: str, period_days: int = 400) -> pd.DataFrame:
+def fetch_price_history(ticker: str, period_days: int = 400, apply_delay: bool = True) -> pd.DataFrame:
     """
-    Fetch daily historical price data for a ticker with retry logic.
+    Fetch daily historical price data for a ticker with retry logic and rate-limit handling.
 
     Args:
         ticker: Stock ticker symbol (e.g., "CSPX.L")
         period_days: Number of days of history to fetch (default 400)
+        apply_delay: Add random delay to avoid rate limiting (default True)
 
     Returns:
         DataFrame with columns [Date, Close], sorted by date ascending
@@ -19,13 +21,17 @@ def fetch_price_history(ticker: str, period_days: int = 400) -> pd.DataFrame:
     Raises:
         ValueError: If ticker not found or no data available after 3 retry attempts
     """
+    if apply_delay:
+        delay = random.uniform(0.5, 1.5)
+        time.sleep(delay)
+
     max_retries = 3
     retry_delay = 2
 
     for attempt in range(max_retries):
         try:
             ticker_obj = yf.Ticker(ticker)
-            data = ticker_obj.history(period=f"{period_days}d")
+            data = ticker_obj.history(period=f"{period_days}d", auto_adjust=True)
 
             if data.empty:
                 raise ValueError(f"No price data found for ticker: {ticker}")

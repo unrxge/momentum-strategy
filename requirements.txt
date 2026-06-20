@@ -1,4 +1,4 @@
-yfinance==0.2.41
+yfinance>=1.4.1
 pandas==2.2.0
 numpy==1.26.4
 APScheduler==3.10.4
