@@ -49,7 +49,9 @@ def apply_position_limits(
     """
     Apply position size limits to a weight allocation.
 
-    - Caps any weight above max_weight
+    - Caps any weight above max_weight at EXACTLY max_weight
+    - Redistributes excess only to non-capped assets (not back to capped ones)
+    - Handles cascading caps if redistribution pushes another asset over max_weight
     - Removes weights below min_weight and redistributes their share
     - Re-normalizes to sum to 1.0
 
@@ -64,31 +66,44 @@ def apply_position_limits(
     if not weights:
         return {}
 
-    # Step 1: Cap weights at max_weight
-    capped = {ticker: min(weight, max_weight) for ticker, weight in weights.items()}
+    # PHASE 1: Handle max_weight caps with cascading redistribution
+    weights_dict = dict(weights)
+    max_iterations = 100  # Prevent infinite loops
 
-    # Step 2: Remove weights below min_weight
-    above_min = {ticker: weight for ticker, weight in capped.items() if weight >= min_weight}
+    for iteration in range(max_iterations):
+        # Identify all assets currently above max_weight
+        over_max = {t for t, w in weights_dict.items() if w > max_weight}
+
+        if not over_max:
+            break  # No more assets above max_weight
+
+        # Calculate total excess from all over-max assets
+        total_excess = sum(weights_dict[t] - max_weight for t in over_max)
+
+        # Cap all over-max assets at exactly max_weight
+        for t in over_max:
+            weights_dict[t] = max_weight
+
+        # Find assets that are NOT capped (under or at max_weight)
+        under_max = set(weights_dict.keys()) - over_max
+
+        if not under_max:
+            break  # All assets are at the cap, nowhere to redistribute
+
+        # Redistribute excess equally among only the under-max assets
+        per_asset = total_excess / len(under_max)
+        for t in under_max:
+            weights_dict[t] += per_asset
+
+    # PHASE 2: Handle min_weight floor
+    above_min = {t: w for t, w in weights_dict.items() if w >= min_weight}
 
     if not above_min:
         raise ValueError("No assets remain after applying minimum weight limit")
 
-    # Step 3: Calculate total of remaining weights
-    total_above_min = sum(above_min.values())
-
-    # Step 4: Redistribute excess from capped weights + removed weights
-    # The excess is 1.0 - total_above_min
-    # Redistribute proportionally among remaining positions
-    if total_above_min < 1.0:
-        excess = 1.0 - total_above_min
-        proportional_increase = excess / len(above_min)
-        adjusted = {ticker: weight + proportional_increase for ticker, weight in above_min.items()}
-    else:
-        adjusted = above_min
-
-    # Step 5: Normalize to exactly 1.0
-    total_adjusted = sum(adjusted.values())
-    normalized = {ticker: weight / total_adjusted for ticker, weight in adjusted.items()}
+    # Normalize to 1.0
+    total = sum(above_min.values())
+    normalized = {t: w / total for t, w in above_min.items()}
 
     return normalized
 
