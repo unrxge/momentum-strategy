@@ -2,7 +2,7 @@ yfinance>=1.4.1
 pandas==2.2.0
 numpy==1.26.4
 APScheduler==3.10.4
-supabase==2.3.5
+supabase==2.10.0
 python-dotenv==1.0.1
 requests==2.32.3
 python-telegram-bot==21.0
