@@ -145,13 +145,13 @@ def build_target_allocation(
             growth_data = {t: price_data[t] for t in top_growth if t in price_data}
             growth_weights_raw = calculate_inverse_vol_weights(top_growth, price_data)
 
-            # Apply position limits
-            growth_weights_limited = apply_position_limits(growth_weights_raw)
+            # Scale to 80% of portfolio FIRST
+            growth_weights_scaled = {t: w * 0.80 for t, w in growth_weights_raw.items()}
 
-            # Scale to 80% of portfolio
-            growth_weights_scaled = {t: w * 0.80 for t, w in growth_weights_limited.items()}
+            # Then apply position limits (only relevant if scaled weights exceed max)
+            growth_weights_limited = apply_position_limits(growth_weights_scaled)
 
-            for ticker, weight in growth_weights_scaled.items():
+            for ticker, weight in growth_weights_limited.items():
                 allocation[ticker] = {
                     "weight": weight,
                     "gbp_amount": weight * portfolio_value
