@@ -10,13 +10,15 @@ def fetch_price_history(ticker: str, period_days: int = 400, apply_delay: bool =
     """
     Fetch daily historical price data for a ticker with retry logic and rate-limit handling.
 
+    Converts GBX (pence) to GBP (pounds) for LSE-quoted securities.
+
     Args:
         ticker: Stock ticker symbol (e.g., "CSPX.L")
         period_days: Number of days of history to fetch (default 400)
         apply_delay: Add random delay to avoid rate limiting (default True)
 
     Returns:
-        DataFrame with columns [Date, Close], sorted by date ascending
+        DataFrame with columns [Date, Close], sorted by date ascending, prices in GBP
 
     Raises:
         ValueError: If ticker not found or no data available after 3 retry attempts
@@ -35,6 +37,17 @@ def fetch_price_history(ticker: str, period_days: int = 400, apply_delay: bool =
 
             if data.empty:
                 raise ValueError(f"No price data found for ticker: {ticker}")
+
+            # Detect currency and normalize to GBP
+            currency = ticker_obj.info.get("currency", "unknown")
+            print(f"  {ticker}: currency={currency}", end="")
+
+            # Convert GBX (pence) to GBP (pounds) if needed
+            if currency in ["GBX", "GBp"]:
+                data["Close"] = data["Close"] / 100
+                print(" → converting GBX to GBP")
+            else:
+                print()
 
             # Extract Close column and reset index to make Date a column
             df = data[["Close"]].reset_index()
