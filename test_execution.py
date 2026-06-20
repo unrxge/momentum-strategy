@@ -36,12 +36,12 @@ try:
     import json
     print(f"  {json.dumps(cash_response, indent=2)}")
 
-    # Try to extract relevant fields
-    free_cash = cash_response.get("free", cash_response.get("freeCash", 0))
-    total_cash = cash_response.get("total", cash_response.get("totalCash", 0))
+    # Extract relevant fields (normalized keys from get_account_cash())
+    free_cash = cash_response.get("free_cash", 0)
+    total_cash = cash_response.get("total_cash", 0)
 
-    print(f"\n  Free Cash: £{free_cash}")
-    print(f"  Total Cash: £{total_cash}")
+    print(f"\n  Free Cash: £{free_cash:.2f}")
+    print(f"  Total Cash: £{total_cash:.2f}")
 except Exception as e:
     print(f"✗ FAILED: {e}")
     exit(1)
@@ -56,7 +56,8 @@ try:
     import json
     print(f"  {json.dumps(info_response, indent=2)}")
 
-    account_id = info_response.get("accountId", info_response.get("id"))
+    # Extract fields (normalized keys from get_account_info())
+    account_id = info_response.get("account_id")
     currency = info_response.get("currency", "GBP")
 
     print(f"\n  Account ID: {account_id}")
