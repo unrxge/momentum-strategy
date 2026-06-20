@@ -5,6 +5,39 @@ import random
 import pandas as pd
 import yfinance as yf
 
+# Cache for GBP/USD exchange rate (fetched once per run)
+_gbpusd_rate_cache = None
+
+
+def get_gbpusd_rate() -> float:
+    """
+    Fetch the current GBP/USD exchange rate.
+
+    Returns the most recent closing rate from the GBPUSD=X ticker.
+    Represents how many USD = 1 GBP.
+
+    Returns:
+        float: Current GBP/USD exchange rate
+    """
+    global _gbpusd_rate_cache
+
+    if _gbpusd_rate_cache is not None:
+        return _gbpusd_rate_cache
+
+    try:
+        rate_ticker = yf.Ticker("GBPUSD=X")
+        rate_data = rate_ticker.history(period="1d", auto_adjust=True)
+
+        if rate_data.empty:
+            raise ValueError("No exchange rate data available")
+
+        rate = rate_data["Close"].iloc[-1]
+        _gbpusd_rate_cache = rate
+        return rate
+
+    except Exception as e:
+        raise ValueError(f"Failed to fetch GBP/USD exchange rate: {e}")
+
 
 def fetch_price_history(ticker: str, period_days: int = 400, apply_delay: bool = True) -> pd.DataFrame:
     """
@@ -46,6 +79,11 @@ def fetch_price_history(ticker: str, period_days: int = 400, apply_delay: bool =
             if currency in ["GBX", "GBp"]:
                 data["Close"] = data["Close"] / 100
                 print(" → converting GBX to GBP")
+            # Convert USD to GBP using current exchange rate
+            elif currency == "USD":
+                gbpusd_rate = get_gbpusd_rate()
+                data["Close"] = data["Close"] / gbpusd_rate
+                print(f" → converting USD to GBP (rate={gbpusd_rate:.4f})")
             else:
                 print()
 
