@@ -1,0 +1,7 @@
+yfinance==0.2.41
+pandas==2.2.0
+numpy==1.26.4
+APScheduler==3.10.4
+supabase==2.3.5
+python-dotenv==1.0.1
+requests==2.32.3
