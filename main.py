@@ -10,8 +10,9 @@ from src.data.indicators import (
     rolling_return_window,
 )
 
-GROWTH_TICKERS = ["CSPX.L", "EQQQ.L", "VWRL.L", "VEUR.L"]
-DEFENSIVE_TICKERS = ["SGLN.L", "IGLS.L"]
+# LSE ETF equivalents using US tickers (yfinance limitation with .L symbols)
+GROWTH_TICKERS = ["QQQ", "IVV", "VTI", "VXUS"]  # Nasdaq, S&P 500, Total US, Intl stocks
+DEFENSIVE_TICKERS = ["SLV", "GLD"]  # Silver, Gold
 
 
 def analyze_ticker(ticker: str) -> dict | None:
