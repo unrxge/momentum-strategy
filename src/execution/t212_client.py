@@ -76,41 +76,63 @@ class T212Client:
         except requests.RequestException as e:
             raise ValueError(f"Request error: {e}")
 
-    def get_account_summary(self) -> dict:
+    def get_account_cash(self) -> dict:
         """
-        Fetch account summary (balance, currency, available cash).
+        Fetch account cash balance details.
+
+        Calls GET /equity/account/cash
 
         Returns:
-            Dict with keys: balance, currency, cash, account_id, etc.
+            Raw response dict with cash balance details
+            (fields: free, total, ppl, result, invested, blocked, etc.)
         """
-        response = self._request("GET", "account/cash")
+        try:
+            response = self._request("GET", "equity/account/cash")
+            return response
+        except ValueError as e:
+            if "401" in str(e):
+                print("\n⚠️  401 Authentication Error — Known T212 Beta Issue")
+                print("   This is a known issue some users report on demo accounts.")
+                print("   Check that your API key was generated in Practice/Demo mode,")
+                print("   not in Live mode. Demo keys only work with demo endpoints.")
+                raise
+            raise
 
-        return {
-            "balance": response.get("investedCash", 0) + response.get("freeCash", 0),
-            "invested_cash": response.get("investedCash", 0),
-            "free_cash": response.get("freeCash", 0),
-            "currency": response.get("currency", "GBP"),
-            "cash": response.get("freeCash", 0),
-            "raw_response": response,
-        }
+    def get_account_info(self) -> dict:
+        """
+        Fetch account information (ID, currency, etc).
+
+        Calls GET /equity/account/info
+
+        Returns:
+            Dict with account_id, currency, and other account metadata
+        """
+        response = self._request("GET", "equity/account/info")
+        return response
 
     def get_current_positions(self) -> dict[str, dict]:
         """
         Fetch current open positions.
 
+        Calls GET /equity/portfolio
+
         Returns:
-            Dict of {ticker: {quantity, current_value, avg_price}}
+            Dict of {ticker: {quantity, current_value, current_price, avg_price}}
         """
-        response = self._request("GET", "portfolio/open-positions")
+        response = self._request("GET", "equity/portfolio")
 
         positions = {}
-        for position in response if isinstance(response, list) else response.get("positions", []):
+
+        # Handle if response is a list or dict
+        position_list = response if isinstance(response, list) else response.get("positions", [])
+
+        for position in position_list:
             ticker = position.get("ticker")
             if ticker:
                 positions[ticker] = {
                     "quantity": float(position.get("quantity", 0)),
-                    "current_value": float(position.get("currentPrice", 0)) * float(position.get("quantity", 0)),
                     "current_price": float(position.get("currentPrice", 0)),
+                    "current_value": float(position.get("currentPrice", 0)) * float(position.get("quantity", 0)),
                     "avg_price": float(position.get("averagePrice", 0)),
                     "raw_position": position,
                 }

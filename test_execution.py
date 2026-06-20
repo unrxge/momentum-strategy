@@ -26,24 +26,50 @@ except Exception as e:
     print("  Check that ENVIRONMENT and T212_*_API_* variables are set in .env")
     exit(1)
 
-# Test 2: Get account summary
-print("\n[2/5] GET ACCOUNT SUMMARY")
+# Test 2a: Get account cash
+print("\n[2a/5] GET ACCOUNT CASH")
 print("-" * 90)
 
 try:
-    account = client.get_account_summary()
-    print(f"  Account Balance: £{account['balance']:.2f}")
-    print(f"  Available Cash: £{account['cash']:.2f}")
-    print(f"  Currency: {account['currency']}")
-    print(f"  Account ID: {account['account_id']}")
-    portfolio_value = account["balance"]
+    cash_response = client.get_account_cash()
+    print(f"  Raw JSON Response:")
+    import json
+    print(f"  {json.dumps(cash_response, indent=2)}")
+
+    # Try to extract relevant fields
+    free_cash = cash_response.get("free", cash_response.get("freeCash", 0))
+    total_cash = cash_response.get("total", cash_response.get("totalCash", 0))
+
+    print(f"\n  Free Cash: £{free_cash}")
+    print(f"  Total Cash: £{total_cash}")
 except Exception as e:
     print(f"✗ FAILED: {e}")
-    print("  Check API key validity for the active environment")
     exit(1)
 
+# Test 2b: Get account info
+print("\n[2b/5] GET ACCOUNT INFO")
+print("-" * 90)
+
+try:
+    info_response = client.get_account_info()
+    print(f"  Raw JSON Response:")
+    import json
+    print(f"  {json.dumps(info_response, indent=2)}")
+
+    account_id = info_response.get("accountId", info_response.get("id"))
+    currency = info_response.get("currency", "GBP")
+
+    print(f"\n  Account ID: {account_id}")
+    print(f"  Currency: {currency}")
+except Exception as e:
+    print(f"✗ FAILED: {e}")
+    exit(1)
+
+# Use the free cash as portfolio value for allocation
+portfolio_value = free_cash if 'free_cash' in locals() else 5000
+
 # Test 3: Get current positions
-print("\n[3/5] GET CURRENT POSITIONS")
+print("\n[3/5] GET CURRENT POSITIONS (from /equity/portfolio)")
 print("-" * 90)
 
 try:
@@ -59,7 +85,7 @@ except Exception as e:
     exit(1)
 
 # Test 4: Generate target allocation using real portfolio value
-print("\n[4/5] GENERATE TARGET ALLOCATION (using actual account value)")
+print("\n[4/6] GENERATE TARGET ALLOCATION (using actual account value)")
 print("-" * 90)
 
 try:
@@ -114,7 +140,7 @@ except Exception as e:
     exit(1)
 
 # Test 5: Generate trade list
-print("\n[5/5] GENERATE TRADE LIST")
+print("\n[5/6] GENERATE TRADE LIST")
 print("-" * 90)
 
 try:
