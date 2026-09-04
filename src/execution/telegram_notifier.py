@@ -1,6 +1,7 @@
 """Telegram notification layer for trade alerts and approvals."""
 
 import os
+import re
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
@@ -311,11 +312,13 @@ def wait_for_reply(timeout_seconds: int = 86400, high_water_mark: int = 0) -> di
                 if message_timestamp < start_timestamp:
                     continue
 
-                # Check if this is a YES or NO reply
-                if "YES" in text:
+                # Check if this is a YES or NO reply (whole-word match: "NOT NOW" is not a NO,
+                # "YESTERDAY" is not a YES)
+                words = set(re.findall(r"[A-Z]+", text))
+                if "YES" in words and "NO" not in words:
                     print(f"✅ Received: YES (update_id={update_id}, timestamp={message_timestamp})")
                     return {"reply": "YES", "update_id": update_id, "timestamp": message_timestamp}
-                elif "NO" in text:
+                elif "NO" in words:
                     print(f"❌ Received: NO (update_id={update_id}, timestamp={message_timestamp})")
                     return {"reply": "NO", "update_id": update_id, "timestamp": message_timestamp}
 

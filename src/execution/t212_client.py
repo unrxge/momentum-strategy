@@ -137,18 +137,45 @@ class T212Client:
         # Handle if response is a list or dict
         position_list = response if isinstance(response, list) else response.get("positions", [])
 
+        # BUG FIX: GBX-quoted lines (e.g. CSP1_EQ, SGLNl_EQ) report prices in pence. Normalise to GBP so
+        # current_value is comparable with the GBP target allocation.  Currency comes from instrument
+        # metadata (cached); unknown → assume GBP and warn.
+        ccy = self._instrument_currencies()
         for position in position_list:
             ticker = position.get("ticker")
             if ticker:
+                px = float(position.get("currentPrice", 0))
+                avg = float(position.get("averagePrice", 0))
+                cur = ccy.get(ticker)
+                if cur is None:
+                    print(f"⚠️  {ticker}: currency unknown, assuming GBP")
+                elif cur in ("GBX", "GBp"):
+                    px, avg = px / 100.0, avg / 100.0
+                elif cur != "GBP":
+                    print(f"⚠️  {ticker}: quoted in {cur}; value NOT converted to GBP")
+                qty = float(position.get("quantity", 0))
                 positions[ticker] = {
-                    "quantity": float(position.get("quantity", 0)),
-                    "current_price": float(position.get("currentPrice", 0)),
-                    "current_value": float(position.get("currentPrice", 0)) * float(position.get("quantity", 0)),
-                    "avg_price": float(position.get("averagePrice", 0)),
+                    "quantity": qty,
+                    "current_price": px,
+                    "current_value": px * qty,
+                    "avg_price": avg,
+                    "currency": cur,
                     "raw_position": position,
                 }
 
         return positions
+
+    _ccy_cache: dict | None = None
+
+    def _instrument_currencies(self) -> dict[str, str]:
+        """{t212_ticker: currencyCode} from /equity/metadata/instruments, cached per process."""
+        if T212Client._ccy_cache is None:
+            try:
+                T212Client._ccy_cache = {i.get("ticker"): i.get("currencyCode") for i in self.get_instruments() if i.get("ticker")}
+            except Exception as e:
+                print(f"⚠️  Could not load instrument currencies: {e}")
+                T212Client._ccy_cache = {}
+        return T212Client._ccy_cache
 
     def get_instruments(self) -> list[dict]:
         """

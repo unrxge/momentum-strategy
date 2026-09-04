@@ -29,6 +29,32 @@ T212_TICKER_MAP = {
 }
 
 
+# Strategy v2 adds all-maturity gilts (iShares Core UK Gilts UCITS ETF, ISIN IE00B1FZSB30, LSE line "IGLT").
+# The T212 order ticker has NOT been verified against /equity/metadata/instruments + exchange ID 42 yet.
+# Run the same ISIN → exchange-42 check as find_t212_tickers.py and then move it into T212_TICKER_MAP.
+PENDING_VERIFICATION = {
+    "IGLT.L": {"isin": "IE00B1FZSB30", "expected_t212_ticker": "IGLTl_EQ", "currency": "GBP"},
+}
+
+YF_TICKER_MAP = {v: k for k, v in T212_TICKER_MAP.items()}  # reverse: T212 → yfinance
+
+
+def positions_to_yfinance(positions: dict[str, dict]) -> dict[str, dict]:
+    """
+    Re-key a T212 positions dict by yfinance ticker so it can be compared with the
+    target allocation.  Holdings outside the strategy universe are DROPPED (and
+    reported) rather than sold — an ISA may hold other things.
+    """
+    out = {}
+    for t212, pos in positions.items():
+        yf = YF_TICKER_MAP.get(t212)
+        if yf is None:
+            print(f"⚠️  Ignoring non-universe holding {t212} (value £{pos.get('current_value', 0):.2f})")
+            continue
+        out[yf] = pos
+    return out
+
+
 def get_t212_ticker(yfinance_ticker: str) -> str:
     """
     Convert yfinance ticker to T212 order API ticker.

@@ -182,7 +182,8 @@ def build_target_allocation(
                 }
 
             # Find least negative defensive
-            least_negative = top_defensive[-1]  # Last in ranked list (lowest momentum)
+            # BUG FIX: the list is sorted descending, so the least-negative asset is the FIRST one
+            least_negative = top_defensive[0]
             allocation[least_negative[0]] = {
                 "weight": 0.10,
                 "gbp_amount": 0.10 * portfolio_value

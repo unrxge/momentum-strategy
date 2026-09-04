@@ -12,7 +12,8 @@ from src.execution.telegram_notifier import (
     wait_for_reply,
     get_high_water_mark,
 )
-from src.data.price_fetcher import fetch_price_history
+from src.data.price_fetcher import fetch_price_history, PriceDataError
+from src.execution.t212_tickers import positions_to_yfinance
 from src.signals.regime import check_regime, check_fast_crash
 from src.signals.momentum import rank_growth_assets, rank_defensive_assets, select_top_growth
 from src.signals.risk import check_drawdown
@@ -20,6 +21,7 @@ from src.portfolio.allocator import build_target_allocation
 from src.logging.supabase_client import (
     log_signal_snapshot,
     log_trade_decision,
+    log_portfolio_value,
     get_portfolio_value_history,
     send_heartbeat,
 )
@@ -27,6 +29,38 @@ from src.execution.rebalance_executor import execute_rebalance
 
 GROWTH_TICKERS = ["CSPX.L", "EQQQ.L", "VWRL.L", "VEUR.L"]
 DEFENSIVE_TICKERS = ["SGLN.L", "IGLS.L"]
+CIRCUIT_BREAKER_DD = 0.15          # fraction; check_drawdown() returns a fraction
+APPROVAL_TIMEOUT_SECONDS = 18000   # 5 hours (GitHub Actions job limit is 6 h)
+
+
+def _env() -> str:
+    return os.getenv("ENVIRONMENT", "DEMO").upper()
+
+
+def _alert(text: str) -> None:
+    """Send a Telegram message; never silent on failure (BUG FIX: results were ignored)."""
+    if not send_message(text):
+        print(f"✗ TELEGRAM SEND FAILED — message was:\n{text}")
+
+
+def _snapshot_account(client: "T212Client | None" = None) -> dict:
+    """
+    Total account value = free cash + market value of positions (GBP).
+    BUG FIX: the original used free_cash alone, which is ~2% of the account once invested,
+    so the second rebalance would have sold ~98% of every holding.
+    Also writes portfolio_value_history (previously never populated) so the drawdown
+    circuit breaker has data.
+    """
+    client = client or T212Client()
+    cash = client.get_account_cash()
+    raw_positions = client.get_current_positions()
+    positions = positions_to_yfinance(raw_positions)
+    invested = sum(p["current_value"] for p in raw_positions.values())
+    total = float(cash["free_cash"]) + invested
+    log_portfolio_value({"environment": _env(), "total_value_gbp": total,
+                         "cash_gbp": float(cash["free_cash"]), "invested_gbp": invested})
+    return {"client": client, "cash": cash, "positions": positions, "raw_positions": raw_positions,
+            "invested": invested, "total_value": total}
 
 # Market calendars (cached on first use)
 _lse_calendar = None
@@ -130,7 +164,14 @@ def weekly_job():
             cspx_prices = fetch_price_history("CSPX.L", period_days=400, apply_delay=True)["Close"]
         except Exception as e:
             print(f"✗ Failed to fetch CSPX.L: {e}")
+            _alert(f"{_env()} ACCOUNT\n\n❌ WEEKLY CHECK ABORTED\n\nPrice data failed the quality gate:\n{e}")
             return
+
+        # Snapshot account value (best effort) so drawdown history exists
+        try:
+            _snapshot_account()
+        except Exception as e:
+            print(f"⚠️  Could not snapshot account value: {e}")
 
         # Check regime and fast-crash
         print("[2/4] Check regime and fast-crash...")
@@ -144,8 +185,9 @@ def weekly_job():
             limit=100
         )
 
-        drawdown_pct = check_drawdown(portfolio_history) if portfolio_history else 0.0
-        circuit_breaker_triggered = bool(drawdown_pct > 15.0)
+        drawdown_pct = check_drawdown(portfolio_history) if portfolio_history else 0.0   # fraction, e.g. 0.12
+        # BUG FIX: compared a fraction against 15.0 — could never fire
+        circuit_breaker_triggered = bool(drawdown_pct > CIRCUIT_BREAKER_DD)
 
         # Get current prices
         cspx_price = float(cspx_prices.iloc[-1]) if cspx_prices is not None else None
@@ -161,7 +203,7 @@ def weekly_job():
             "cspx_200ma": cspx_200ma,
             "fast_crash_triggered": bool(fast_crash_triggered),
             "ten_day_return": None,
-            "portfolio_drawdown_pct": float(drawdown_pct),
+            "portfolio_drawdown_pct": float(drawdown_pct * 100),
             "circuit_breaker_triggered": bool(circuit_breaker_triggered),
             "growth_rankings": None,  # Weekly checks don't calculate rankings
             "defensive_rankings": None,  # Rankings are monthly_job()'s responsibility
@@ -179,14 +221,15 @@ Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 TRIGGER: {trigger_name.upper()}
 Regime: {regime.upper()}
-Drawdown: {drawdown_pct:.2f}%
+Drawdown: {drawdown_pct * 100:.2f}%
 CSPX Price: £{cspx_price:.2f}
 CSPX 200-MA: £{cspx_200ma:.2f if cspx_200ma else 'N/A'}
 
-Action: Exposure is being reduced automatically.
-No user approval required.
+Action: NO ORDERS PLACED. This trigger is informational only
+(the backtest showed automatic crash exits lose money).
+Review the portfolio manually; the next monthly rebalance applies the rules.
 """
-            send_message(message)
+            _alert(message)
             print(f"✓ Sent {trigger_name} trigger notification to Telegram")
         else:
             message = f"""{os.getenv("ENVIRONMENT", "DEMO").upper()} ACCOUNT
@@ -196,13 +239,13 @@ No user approval required.
 Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 Regime: {regime.upper()}
-Drawdown: {drawdown_pct:.2f}%
+Drawdown: {drawdown_pct * 100:.2f}%
 CSPX Price: £{cspx_price:.2f}
 
 All indicators normal. No action required.
 Next check: Monday 09:00
 """
-            send_message(message)
+            _alert(message)
             print("✓ Sent weekly check complete message to Telegram")
 
         print("✅ WEEKLY JOB COMPLETE\n")
@@ -241,28 +284,32 @@ def monthly_job():
         # Initialize T212 client
         print("[1/7] Initialize T212 client...")
         try:
-            client = T212Client()
-            account_cash = client.get_account_cash()
-            positions = client.get_current_positions()
-            account_value = account_cash["free_cash"]
-            print(f"✓ Account value: £{account_value:.2f}\n")
+            snap = _snapshot_account()
+            client = snap["client"]
+            positions = snap["positions"]          # keyed by yfinance ticker (BUG FIX: was T212 keys)
+            account_value = snap["total_value"]    # BUG FIX: was free cash only
+            print(f"✓ Account value: £{account_value:.2f} (cash £{snap['cash']['free_cash']:.2f} + invested £{snap['invested']:.2f})\n")
         except Exception as e:
             print(f"✗ Failed to initialize T212: {e}")
+            _alert(f"{_env()} ACCOUNT\n\n❌ MONTHLY REBALANCE ABORTED\n\nT212 account read failed:\n{e}")
             return
 
         # Fetch price data and run signal pipeline
         print("[2/7] Fetch price data and run signal pipeline...")
         try:
             price_data = {}
+            failures = []
             for ticker in GROWTH_TICKERS + DEFENSIVE_TICKERS:
                 try:
                     df = fetch_price_history(ticker, period_days=400, apply_delay=True)
                     price_data[ticker] = df["Close"]
                 except Exception as e:
-                    print(f"  Warning: Failed to fetch {ticker}: {e}")
+                    print(f"  ✗ Failed to fetch {ticker}: {e}")
+                    failures.append(f"{ticker}: {e}")
 
-            if not price_data:
-                print("✗ No price data available")
+            # BUG FIX: a partial universe silently produced a distorted ranking / allocation.
+            if failures:
+                _alert(f"{_env()} ACCOUNT\n\n❌ MONTHLY REBALANCE ABORTED\n\nPrice data failed for:\n" + "\n".join(failures))
                 return
 
             # Run signal pipeline
@@ -281,6 +328,7 @@ def monthly_job():
 
         except Exception as e:
             print(f"✗ Failed to run signal pipeline: {e}")
+            _alert(f"{_env()} ACCOUNT\n\n❌ MONTHLY REBALANCE ABORTED\n\nSignal pipeline error:\n{e}")
             return
 
         # Build target allocation
@@ -296,6 +344,7 @@ def monthly_job():
             print(f"✓ Target allocation generated\n")
         except Exception as e:
             print(f"✗ Failed to build allocation: {e}")
+            _alert(f"{_env()} ACCOUNT\n\n❌ MONTHLY REBALANCE ABORTED\n\nAllocation error:\n{e}")
             return
 
         # Generate trade list
@@ -349,7 +398,7 @@ def monthly_job():
                 check_type="MONTHLY",
                 is_simulated=False,
             )
-            send_message(message)
+            _alert(message)
             print("✓ Sent no-action message to Telegram")
 
             # Log trade decision with null response
@@ -387,12 +436,20 @@ def monthly_job():
                 reason="Rebalancing to target allocation based on regime and momentum signals.",
             )
 
-            send_message(telegram_message)
+            # BUG FIX: a failed send used to be ignored and the job waited 5 h for a reply nobody could give
+            if not send_message(telegram_message):
+                print("✗ Telegram send failed — cannot obtain approval; aborting this cycle")
+                log_trade_decision({
+                    "signal_snapshot_id": signal_id, "environment": _env(), "trade_list": trades,
+                    "total_buy_amount": float(sum(t["amount_gbp"] for t in trades if t["action"] == "BUY")),
+                    "total_sell_amount": float(sum(t["amount_gbp"] for t in trades if t["action"] == "SELL")),
+                    "telegram_message_sent": telegram_message, "user_response": "SEND_FAILED", "responded_at": None,
+                })
+                return
             print("✓ Message sent to Telegram")
 
-            # Wait for reply (24 hours)
-            print("⏳ Waiting for approval (24 hours)...\n")
-            reply_data = wait_for_reply(timeout_seconds=18000, high_water_mark=high_water_mark)
+            print(f"⏳ Waiting for approval ({APPROVAL_TIMEOUT_SECONDS / 3600:.0f} hours)...\n")
+            reply_data = wait_for_reply(timeout_seconds=APPROVAL_TIMEOUT_SECONDS, high_water_mark=high_water_mark)
 
             # Handle response
             print("[7/7] Log trade decision...")
@@ -403,7 +460,7 @@ def monthly_job():
             else:
                 user_response = "TIMEOUT"
                 responded_at = None
-                print("Response: TIMEOUT (no reply within 24 hours)")
+                print(f"Response: TIMEOUT (no reply within {APPROVAL_TIMEOUT_SECONDS / 3600:.0f} hours)")
 
             total_buy = float(sum(t["amount_gbp"] for t in trades if t["action"] == "BUY"))
             total_sell = float(sum(t["amount_gbp"] for t in trades if t["action"] == "SELL"))
@@ -437,15 +494,15 @@ def monthly_job():
                     print(f"  Failed orders: {execution_summary.get('total_failed', 0)}\n")
 
                     if phase_status == "sells_placed_awaiting_settlement":
-                        send_message(
+                        _alert(
                             f"{os.getenv('ENVIRONMENT', 'DEMO').upper()} ACCOUNT\n\n"
-                            f"⏸️ REBALANCE PARTIALLY COMPLETE\n\n"
-                            f"SELL orders placed and awaiting settlement.\n"
-                            f"BUY orders will execute automatically once settlement clears.\n"
-                            f"(This typically takes minutes to hours.)"
+                            f"⏸️ REBALANCE INCOMPLETE — ACTION NEEDED\n\n"
+                            f"SELL orders were placed but were still pending after the wait window.\n"
+                            f"BUY orders were NOT placed and nothing will retry them automatically.\n"
+                            f"Place the buys manually or re-run the monthly job once orders have filled."
                         )
                     else:
-                        send_message(
+                        _alert(
                             f"{os.getenv('ENVIRONMENT', 'DEMO').upper()} ACCOUNT\n\n"
                             f"✅ REBALANCE EXECUTION COMPLETE\n\n"
                             f"Successful orders: {execution_summary.get('total_successful', 0)}\n"
@@ -453,7 +510,7 @@ def monthly_job():
                         )
                 except Exception as e:
                     print(f"✗ Execution failed: {e}")
-                    send_message(
+                    _alert(
                         f"{os.getenv('ENVIRONMENT', 'DEMO').upper()} ACCOUNT\n\n"
                         f"❌ REBALANCE EXECUTION FAILED\n\n"
                         f"Error: {e}\n\n"

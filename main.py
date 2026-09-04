@@ -67,6 +67,13 @@ def main():
 
     _start_health_server()
 
+    # BUG FIX: GitHub Actions workflows are the scheduler of record. Running APScheduler here as
+    # well would fire every job twice (two Telegram prompts, two sets of orders). Opt in explicitly.
+    if os.getenv("RAILWAY_SCHEDULER", "0") != "1":
+        print("APScheduler DISABLED (GitHub Actions is the scheduler). Set RAILWAY_SCHEDULER=1 to enable here.")
+        while True:
+            time.sleep(3600)
+
     scheduler = BackgroundScheduler()
 
     # Weekly job: Monday 09:00

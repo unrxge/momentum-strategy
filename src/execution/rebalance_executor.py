@@ -104,6 +104,14 @@ def execute_sells(
 
     client = T212Client()
 
+    # BUG FIX: size sells from the actual held quantity so a price move between the
+    # signal close and execution can never produce an oversell that T212 rejects.
+    try:
+        held = client.get_current_positions()
+    except Exception as e:
+        print(f"⚠️  Could not fetch positions for sell sizing: {e}")
+        held = {}
+
     # Fetch instruments for precision requirements
     try:
         instruments = client.get_instruments()
@@ -155,6 +163,14 @@ def execute_sells(
                 precision = 2  # SGLN specifically needs 2-decimal precision
 
             quantity = client.calculate_order_quantity(requested_amount, current_price, precision=precision)
+            held_qty = float(held.get(t212_ticker, {}).get("quantity", 0.0))
+            if trade.get("quantity"):                      # full exit: use the exact held quantity
+                quantity = round(float(trade["quantity"]), precision)
+            elif held_qty and quantity > held_qty:          # partial sell that would oversell → clip
+                print(f"  Clipping sell quantity {quantity} → held {held_qty}")
+                quantity = round(held_qty, precision)
+            if quantity <= 0:
+                raise ValueError(f"No holding to sell for {t212_ticker}")
 
             # CRITICAL: For SELL orders, quantity must be NEGATIVE
             if action == "SELL":
@@ -438,10 +454,23 @@ def execute_buys(
     return summary
 
 
+def wait_for_settlement(max_wait_seconds: int = 900, poll_seconds: int = 20) -> bool:
+    """Poll until no pending orders remain. Returns True if clear, False on timeout."""
+    waited = 0
+    while waited <= max_wait_seconds:
+        if not check_for_pending_orders()["has_pending"]:
+            return True
+        time.sleep(poll_seconds)
+        waited += poll_seconds
+        print(f"  … still pending after {waited}s")
+    return False
+
+
 def execute_rebalance(
     trade_list: list[dict],
     trade_decision_id: str,
     price_data: dict,
+    settle_wait_seconds: int = 900,
 ) -> dict:
     """
     Orchestrate a complete rebalance across two phases: SELL then BUY.
@@ -481,12 +510,14 @@ def execute_rebalance(
         print("-" * 100 + "\n")
         sell_summary = execute_sells(trade_list, trade_decision_id, price_data)
 
-        # After executing sells, immediately check if any are still pending
-        pending_check = check_for_pending_orders()
-        if pending_check["has_pending"]:
-            print(f"\n⏸️  SELL orders placed but still pending settlement.")
+        # BUG FIX: previously returned immediately and nothing ever retried the BUY phase
+        # (monthly_job only runs on the rebalance day), leaving the account in cash for a month.
+        # Now wait (default 15 min) for market sells to fill before giving up.
+        if not wait_for_settlement(settle_wait_seconds):
+            pending_check = check_for_pending_orders()
+            print(f"\n⏸️  SELL orders still pending after {settle_wait_seconds}s.")
             print(f"   Pending: {len(pending_check['pending_orders'])} order(s)")
-            print(f"   BUY phase cannot proceed until these settle (can take hours/days).\n")
+            print(f"   BUY phase NOT executed — manual intervention required.\n")
 
             return {
                 "phase_status": "sells_placed_awaiting_settlement",
