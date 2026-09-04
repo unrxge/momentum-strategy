@@ -1,91 +1,76 @@
 #!/usr/bin/env python3
-"""Entry point for the momentum strategy system."""
+"""Entry point for the momentum strategy scheduler.
 
-import pandas as pd
-from src.data.price_fetcher import fetch_price_history
-from src.data.indicators import (
-    moving_average,
-    trailing_return,
-    rolling_volatility,
-    rolling_return_window,
-)
+Persistent process that stays alive and runs jobs on a schedule:
+- Weekly checks (Mondays 09:00)
+- Monthly rebalance (first trading day of month, 09:00)
+- Heartbeat (daily, 08:00)
+"""
 
-GROWTH_TICKERS = ["CSPX.L", "EQQQ.L", "VWRL.L", "VEUR.L"]
-DEFENSIVE_TICKERS = ["SGLN.L", "IGLS.L"]
-
-
-def analyze_ticker(ticker: str) -> dict | None:
-    """
-    Fetch and analyze a single ticker.
-
-    Args:
-        ticker: Stock ticker symbol
-
-    Returns:
-        Dictionary with analysis results, or None if fetch fails
-    """
-    try:
-        prices_df = fetch_price_history(ticker, period_days=400)
-        prices = prices_df["Close"]
-
-        current_price = prices.iloc[-1]
-        ma_200 = moving_average(prices, window=200)
-        return_12m = trailing_return(prices, days=252)  # ~252 trading days/year
-        return_3m = trailing_return(prices, days=63)  # ~63 trading days/quarter
-        volatility = rolling_volatility(prices, window=20)
-        return_10d = rolling_return_window(prices, window=10)
-
-        return {
-            "Ticker": ticker,
-            "Price": f"£{current_price:.2f}",
-            "200-Day MA": f"£{ma_200:.2f}",
-            "12-Month Return": f"{return_12m * 100:.2f}%",
-            "3-Month Return": f"{return_3m * 100:.2f}%",
-            "20-Day Volatility": f"{volatility * 100:.2f}%",
-            "10-Day Return": f"{return_10d * 100:.2f}%",
-        }
-
-    except ValueError as e:
-        print(f"⚠️  Warning: {ticker} — {e}")
-        return None
+import os
+from datetime import datetime
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+from src.scheduler.jobs import weekly_job, monthly_job, heartbeat_job
 
 
 def main():
-    """Fetch and display summary analysis for all tickers."""
-    print("Momentum strategy system initialized\n")
-    print("=" * 120)
-    print("GROWTH TICKERS")
-    print("=" * 120)
+    """Start the momentum strategy scheduler."""
+    environment = os.getenv("ENVIRONMENT", "DEMO").upper()
+    start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    results = []
-    for ticker in GROWTH_TICKERS:
-        result = analyze_ticker(ticker)
-        if result:
-            results.append(result)
+    print("\n" + "=" * 90)
+    print("MOMENTUM STRATEGY SCHEDULER STARTED")
+    print("=" * 90)
+    print(f"Environment: {environment}")
+    print(f"Started at: {start_time}")
+    print("\nScheduled jobs:")
+    print("  • Weekly check: Every Monday at 09:00")
+    print("  • Monthly rebalance: First trading day of month at 09:00")
+    print("  • Heartbeat: Daily at 08:00")
+    print("\nScheduler is now running. Press Ctrl+C to exit.\n")
 
-    if results:
-        df = pd.DataFrame(results)
-        print(df.to_string(index=False))
-    else:
-        print("No growth tickers loaded successfully")
+    scheduler = BlockingScheduler()
 
-    print("\n" + "=" * 120)
-    print("DEFENSIVE TICKERS")
-    print("=" * 120)
+    # Weekly job: Monday 09:00
+    scheduler.add_job(
+        weekly_job,
+        trigger=CronTrigger(day_of_week="mon", hour=9, minute=0),
+        id="weekly_check",
+        name="Weekly check (regime, crash, drawdown)",
+        replace_existing=True,
+    )
 
-    results = []
-    for ticker in DEFENSIVE_TICKERS:
-        result = analyze_ticker(ticker)
-        if result:
-            results.append(result)
+    # Monthly job: runs every day at 09:00, but checks internally if it's the first trading day
+    scheduler.add_job(
+        monthly_job,
+        trigger=CronTrigger(hour=9, minute=0),
+        id="monthly_rebalance",
+        name="Monthly rebalance (runs on first trading day only)",
+        replace_existing=True,
+    )
 
-    if results:
-        df = pd.DataFrame(results)
-        print(df.to_string(index=False))
-    else:
-        print("No defensive tickers loaded successfully")
+    # Heartbeat: daily at 08:00
+    scheduler.add_job(
+        heartbeat_job,
+        trigger=CronTrigger(hour=8, minute=0),
+        id="heartbeat",
+        name="Heartbeat (daily monitoring)",
+        replace_existing=True,
+    )
 
-    print("\n" + "=" * 120)
+    # Start the scheduler (blocks indefinitely)
+    try:
+        scheduler.start()
+    except KeyboardInterrupt:
+        print("\n\nScheduler stopped by user.")
+        scheduler.shutdown()
+    except Exception as e:
+        print(f"\n\nScheduler crashed: {e}")
+        import traceback
+        traceback.print_exc()
+        scheduler.shutdown()
+        raise  # Re-raise so Railway sees a non-zero exit and restarts
 
 
 if __name__ == "__main__":
