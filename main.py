@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -35,6 +36,17 @@ def _start_health_server():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"Health endpoint running on port {port}")
+
+    # Self-ping every 45s to prevent Railway idle sleep between external pings
+    def _self_ping():
+        while True:
+            time.sleep(45)
+            try:
+                urllib.request.urlopen(f"http://localhost:{port}", timeout=5)
+            except Exception:
+                pass
+
+    threading.Thread(target=_self_ping, daemon=True).start()
 
 
 def main():
