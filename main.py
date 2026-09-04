@@ -8,10 +8,31 @@ Persistent process that stays alive and runs jobs on a schedule:
 """
 
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from src.scheduler.jobs import weekly_job, monthly_job, heartbeat_job
+
+
+def _start_health_server():
+    """Run a minimal HTTP server so Railway keeps the container alive."""
+    port = int(os.getenv("PORT", 8080))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *args):
+            pass  # silence access logs
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health endpoint running on port {port}")
 
 
 def main():
@@ -29,6 +50,8 @@ def main():
     print("  • Monthly rebalance: First trading day of month at 09:00")
     print("  • Heartbeat: Daily at 08:00")
     print("\nScheduler is now running. Press Ctrl+C to exit.\n")
+
+    _start_health_server()
 
     scheduler = BlockingScheduler()
 
