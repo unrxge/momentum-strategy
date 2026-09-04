@@ -87,6 +87,9 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
         other = {k: v for k, v in snap["positions"].items() if k.startswith("OTHER:")}
         positions = {k: v for k, v in snap["positions"].items() if not k.startswith("OTHER:")}
         universe_value = snap["cash"]["free"] + sum(v["value"] for v in positions.values())
+        _cap = float(os.getenv("MAX_CAPITAL") or 0)
+        if _cap:
+            universe_value = min(universe_value, _cap)
         if other:
             print(f"ignoring non-universe holdings: {list(other)}")
 
@@ -145,7 +148,9 @@ def weekly() -> int:
         history = store.portfolio_history()
         dd = store.drawdown(history)
         sig, target, last_px = _signals_and_targets()
-        trades = generate_trades(target, positions, snap["cash"]["free"] + sum(v["value"] for v in positions.values()), PARAMS)
+        _uv = snap["cash"]["free"] + sum(v["value"] for v in positions.values())
+        _cap = float(os.getenv("MAX_CAPITAL") or 0)
+        trades = generate_trades(target, positions, min(_uv, _cap) if _cap else _uv, PARAMS)
         store.log_snapshot("weekly", sig, target, dd)
         nxt = next_rebalance_date(date.today(), REBALANCE_TRADING_DAY_OF_MONTH)
         body = (f"Account: {notify.fmt_gbp(snap['total'])} (cash {notify.fmt_gbp(snap['cash']['free'])})\n"
