@@ -1,0 +1,35 @@
+name: Weekly Status
+
+on:
+  schedule:
+    - cron: '30 9 * * 1'   # Mondays 09:30 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: trading-account
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m src.jobs weekly
+        env:
+          ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+          T212_DEMO_API_KEY: ${{ secrets.T212_DEMO_API_KEY }}
+          T212_DEMO_API_SECRET: ${{ secrets.T212_DEMO_API_SECRET }}
+          T212_DEMO_BASE_URL: ${{ secrets.T212_DEMO_BASE_URL }}
+          T212_LIVE_API_KEY: ${{ secrets.T212_LIVE_API_KEY }}
+          T212_LIVE_API_SECRET: ${{ secrets.T212_LIVE_API_SECRET }}
+          T212_LIVE_BASE_URL: ${{ secrets.T212_LIVE_BASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

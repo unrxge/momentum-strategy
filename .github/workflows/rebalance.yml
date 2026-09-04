@@ -1,0 +1,49 @@
+name: Monthly Rebalance
+
+on:
+  schedule:
+    - cron: '30 9 * * 1-5'   # every weekday 09:30 UTC; the job itself only acts on the 1st trading day
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Run now even if today is not the first trading day'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Compute and report only, place no orders'
+        type: boolean
+        default: false
+
+concurrency:
+  group: trading-account
+  cancel-in-progress: false
+
+jobs:
+  rebalance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Rebalance
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          python -m src.jobs rebalance $ARGS
+        env:
+          ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+          T212_DEMO_API_KEY: ${{ secrets.T212_DEMO_API_KEY }}
+          T212_DEMO_API_SECRET: ${{ secrets.T212_DEMO_API_SECRET }}
+          T212_DEMO_BASE_URL: ${{ secrets.T212_DEMO_BASE_URL }}
+          T212_LIVE_API_KEY: ${{ secrets.T212_LIVE_API_KEY }}
+          T212_LIVE_API_SECRET: ${{ secrets.T212_LIVE_API_SECRET }}
+          T212_LIVE_BASE_URL: ${{ secrets.T212_LIVE_BASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
