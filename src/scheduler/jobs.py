@@ -81,26 +81,31 @@ def is_trading_day(check_date: date) -> bool:
         return check_date.weekday() < 5
 
 
-def get_first_trading_day_of_month(year: int, month: int) -> date:
+def get_nth_trading_day_of_month(year: int, month: int, n: int = 5) -> date:
     """
-    Get the first trading day of the given month.
+    Get the Nth trading day of the given month.
 
-    Advances day by day from the 1st until is_trading_day() returns True.
+    Counts forward from the 1st, skipping non-trading days, until the Nth
+    trading day is reached. Defaults to the 5th trading day (~one week in)
+    to avoid first-day-of-month volatility from institutional flows.
 
     Args:
         year: Calendar year
         month: Calendar month (1-12)
+        n: Which trading day to target (default 5)
 
     Returns:
-        The first trading day of the month
+        The Nth trading day of the month
     """
     current_date = date(year, month, 1)
+    count = 0
 
-    # Advance until we find a trading day
-    while not is_trading_day(current_date):
+    while True:
+        if is_trading_day(current_date):
+            count += 1
+            if count == n:
+                return current_date
         current_date += timedelta(days=1)
-
-    return current_date
 
 
 def weekly_job():
@@ -225,10 +230,10 @@ def monthly_job():
 
     # Check if today is the first trading day of this month
     today = date.today()
-    first_trading_day = get_first_trading_day_of_month(today.year, today.month)
+    rebalance_day = get_nth_trading_day_of_month(today.year, today.month, n=5)
 
-    if today != first_trading_day:
-        print(f"⏭️  Today ({today}) is not the first trading day ({first_trading_day})")
+    if today != rebalance_day:
+        print(f"⏭️  Today ({today}) is not the rebalance day ({rebalance_day}, 5th trading day)")
         print("   Skipping monthly job.\n")
         return
 
