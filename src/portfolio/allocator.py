@@ -222,4 +222,17 @@ def build_target_allocation(
                     "gbp_amount": 0.10 * portfolio_value
                 }
 
+    # FINAL STEP: Apply 98% cash buffer to protect against T212's over-reservation
+    # Scale all allocations down so total deployment is 98% of portfolio_value,
+    # leaving 2% as unallocated safety buffer. This preserves relative weights.
+    total_allocated_weight = sum(entry["weight"] for entry in allocation.values())
+
+    if total_allocated_weight > 0:
+        # Scale all weights and amounts down proportionally
+        scaling_factor = 0.98 / total_allocated_weight if total_allocated_weight > 0.98 else 1.0
+
+        for ticker in allocation:
+            allocation[ticker]["weight"] *= scaling_factor
+            allocation[ticker]["gbp_amount"] *= scaling_factor
+
     return allocation

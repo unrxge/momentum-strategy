@@ -20,7 +20,7 @@ def check_drawdown(portfolio_value_history: list[float]) -> float:
 
     drawdown = (peak_value - current_value) / peak_value
 
-    return drawdown
+    return float(drawdown)
 
 
 def check_profit_taking(current_price: float, price_at_last_rebalance: float) -> bool:
@@ -36,4 +36,4 @@ def check_profit_taking(current_price: float, price_at_last_rebalance: float) ->
     """
     gain = (current_price / price_at_last_rebalance) - 1
 
-    return gain > 0.35
+    return bool(gain > 0.35)

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Test suite for the T212 execution layer."""
 
+import os
+import json
+from datetime import datetime
 from src.execution.t212_client import T212Client
 from src.execution.trade_generator import generate_trade_list
 from src.data.price_fetcher import fetch_price_history
 from src.signals.regime import check_regime
 from src.signals.momentum import rank_growth_assets, rank_defensive_assets, select_top_growth
 from src.portfolio.allocator import build_target_allocation
+from src.logging.supabase_client import log_signal_snapshot, log_trade_decision
 
 GROWTH_TICKERS = ["CSPX.L", "EQQQ.L", "VWRL.L", "VEUR.L"]
 DEFENSIVE_TICKERS = ["SGLN.L", "IGLS.L"]
@@ -140,6 +144,36 @@ except Exception as e:
     traceback.print_exc()
     exit(1)
 
+# Log signal snapshot after signal pipeline runs
+print("\n[4b/6] LOG SIGNAL SNAPSHOT TO SUPABASE")
+print("-" * 90)
+
+signal_snapshot_id = None
+try:
+    cspx_price = float(cspx_prices.iloc[-1]) if cspx_prices is not None else None
+    cspx_200ma = float(cspx_prices.rolling(200).mean().iloc[-1]) if cspx_prices is not None and len(cspx_prices) >= 200 else None
+
+    signal_snapshot_id = log_signal_snapshot({
+        "environment": os.getenv("ENVIRONMENT", "DEMO").upper(),
+        "check_type": "monthly",
+        "regime": regime,
+        "cspx_price": cspx_price,
+        "cspx_200ma": cspx_200ma,
+        "fast_crash_triggered": False,
+        "ten_day_return": None,
+        "portfolio_drawdown_pct": 0.0,
+        "circuit_breaker_triggered": False,
+        "growth_rankings": [{"ticker": t, "momentum": float(m)} for t, m in ranked_growth],
+        "defensive_rankings": [{"ticker": t, "momentum": float(m)} for t, m in ranked_defensive],
+        "selected_growth": top_growth,
+    })
+    if not signal_snapshot_id:
+        print("  ⚠️  Failed to log signal snapshot (continuing anyway)")
+    print()
+
+except Exception as e:
+    print(f"  ⚠️  Error logging signal snapshot: {e}\n")
+
 # Test 5: Generate trade list
 print("\n[5/6] GENERATE TRADE LIST")
 print("-" * 90)
@@ -180,7 +214,48 @@ except Exception as e:
     traceback.print_exc()
     exit(1)
 
-print("\n" + "=" * 90)
+# Log trade decision after trades are generated
+print("\n[5b/6] LOG TRADE DECISION TO SUPABASE")
+print("-" * 90)
+
+try:
+    if signal_snapshot_id and trades:
+        total_buy = sum(t["amount_gbp"] for t in trades if t["action"] == "BUY")
+        total_sell = sum(t["amount_gbp"] for t in trades if t["action"] == "SELL")
+
+        trade_decision_id = log_trade_decision({
+            "signal_snapshot_id": signal_snapshot_id,
+            "environment": os.getenv("ENVIRONMENT", "DEMO").upper(),
+            "trade_list": trades,
+            "total_buy_amount": total_buy,
+            "total_sell_amount": total_sell,
+            "telegram_message_sent": None,  # Not sent in test
+            "user_response": None,  # Not waiting for response in test
+            "responded_at": None,
+        })
+        if not trade_decision_id:
+            print("  ⚠️  Failed to log trade decision (continuing anyway)")
+        print()
+    elif signal_snapshot_id and not trades:
+        trade_decision_id = log_trade_decision({
+            "signal_snapshot_id": signal_snapshot_id,
+            "environment": os.getenv("ENVIRONMENT", "DEMO").upper(),
+            "trade_list": [],
+            "total_buy_amount": 0,
+            "total_sell_amount": 0,
+            "telegram_message_sent": None,
+            "user_response": None,
+            "responded_at": None,
+        })
+        print("  ✓ Logged no-action trade decision")
+        print()
+    else:
+        print("  ⚠️  No signal snapshot ID, skipping trade decision log\n")
+
+except Exception as e:
+    print(f"  ⚠️  Error logging trade decision: {e}\n")
+
+print("=" * 90)
 print("T212 EXECUTION LAYER TEST COMPLETE")
 print("=" * 90)
 print("\n⚠️  NOTE: No orders were placed. Trade list is for review only.")

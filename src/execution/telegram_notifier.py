@@ -197,15 +197,56 @@ WHY NO ACTION:
     return message
 
 
-def wait_for_reply(timeout_seconds: int = 86400) -> str | None:
+def get_high_water_mark() -> int:
+    """
+    Get the update_id of the most recent message in the chat (high water mark).
+
+    This marks the cutoff point — any message with update_id <= this value is old
+    and should be ignored. Only NEW messages with update_id > this will be considered
+    replies to a fresh prompt.
+
+    Returns:
+        The update_id of the most recent message, or 0 if none found
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        return 0
+
+    try:
+        url = f"https://api.telegram.org/bot{token}/getUpdates"
+        response = requests.get(url, params={"limit": 1, "allowed_updates": ["message"]}, timeout=10)
+
+        if response.status_code != 200:
+            return 0
+
+        data = response.json()
+        updates = data.get("result", [])
+
+        if updates:
+            return updates[0].get("update_id", 0)
+
+        return 0
+
+    except requests.RequestException:
+        return 0
+
+
+def wait_for_reply(timeout_seconds: int = 86400, high_water_mark: int = 0) -> dict | None:
     """
     Poll Telegram for a YES or NO reply from the user.
 
+    Only processes messages with update_id > high_water_mark (i.e., NEW messages sent
+    after the prompt was sent). Also checks message timestamp as a safety layer.
+
     Args:
         timeout_seconds: How long to wait for a reply (default 24 hours)
+        high_water_mark: Only consider messages with update_id > this value
 
     Returns:
-        "YES", "NO", or None if timeout reached
+        Dict with keys {reply: "YES"/"NO", update_id: int, timestamp: int},
+        or None if timeout reached
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -218,10 +259,12 @@ def wait_for_reply(timeout_seconds: int = 86400) -> str | None:
     params = {"timeout": 30, "allowed_updates": ["message"]}
 
     start_time = datetime.now()
+    start_timestamp = int(start_time.timestamp())
     offset = None
     poll_count = 0
 
     print(f"⏳ Waiting for approval (up to {timeout_seconds} seconds)...")
+    print(f"  (Ignoring messages with update_id <= {high_water_mark})")
 
     while True:
         elapsed = (datetime.now() - start_time).total_seconds()
@@ -247,21 +290,34 @@ def wait_for_reply(timeout_seconds: int = 86400) -> str | None:
             updates = data.get("result", [])
 
             for update in updates:
+                update_id = update.get("update_id", 0)
                 message = update.get("message", {})
                 message_chat_id = message.get("chat", {}).get("id")
+                message_timestamp = message.get("date", 0)
                 text = message.get("text", "").upper()
 
-                # Update offset to skip processed messages
-                offset = update.get("update_id", 0) + 1
+                # Always update offset for next request (tells Telegram's servers to skip it)
+                offset = update_id + 1
 
-                # Check if this is from the right chat and contains YES/NO
-                if str(message_chat_id) == str(chat_id):
-                    if "YES" in text:
-                        print("✅ Received: YES — executing trades")
-                        return "YES"
-                    elif "NO" in text:
-                        print("❌ Received: NO — skipping this cycle")
-                        return "NO"
+                # Skip old messages: update_id must be strictly greater than high water mark
+                if update_id <= high_water_mark:
+                    continue
+
+                # Skip messages from wrong chat
+                if str(message_chat_id) != str(chat_id):
+                    continue
+
+                # Safety layer: ignore messages sent before we started waiting
+                if message_timestamp < start_timestamp:
+                    continue
+
+                # Check if this is a YES or NO reply
+                if "YES" in text:
+                    print(f"✅ Received: YES (update_id={update_id}, timestamp={message_timestamp})")
+                    return {"reply": "YES", "update_id": update_id, "timestamp": message_timestamp}
+                elif "NO" in text:
+                    print(f"❌ Received: NO (update_id={update_id}, timestamp={message_timestamp})")
+                    return {"reply": "NO", "update_id": update_id, "timestamp": message_timestamp}
 
         except requests.RequestException as e:
             print(f"⚠️  Telegram polling error: {e}")

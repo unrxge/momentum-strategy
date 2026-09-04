@@ -35,4 +35,4 @@ def check_fast_crash(prices: pd.Series) -> bool:
     """
     rolling_return = rolling_return_window(prices, window=10)
 
-    return rolling_return < -0.07
+    return bool(rolling_return < -0.07)

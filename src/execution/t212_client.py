@@ -149,3 +149,113 @@ class T212Client:
                 }
 
         return positions
+
+    def get_instruments(self) -> list[dict]:
+        """
+        Fetch the full list of instruments T212 supports.
+
+        Calls GET /equity/metadata/instruments
+
+        Returns:
+            List of instrument dicts with ticker, isin, name, currency, etc.
+        """
+        response = self._request("GET", "equity/metadata/instruments")
+
+        # Handle if response is a list or dict with instruments key
+        instruments = response if isinstance(response, list) else response.get("instruments", [])
+
+        return instruments
+
+    def calculate_order_quantity(self, amount_gbp: float, current_price_gbp: float, precision: int = 4) -> float:
+        """
+        Calculate order quantity from a GBP amount and current price.
+
+        Args:
+            amount_gbp: Amount in GBP to spend
+            current_price_gbp: Current price per share in GBP
+            precision: Number of decimal places to round to (default 4, varies by instrument)
+
+        Returns:
+            Quantity rounded to specified decimal places
+
+        Raises:
+            ValueError: If price is zero or negative
+        """
+        if current_price_gbp <= 0:
+            raise ValueError(
+                f"Invalid price: {current_price_gbp}. "
+                f"Price must be positive (got {current_price_gbp})"
+            )
+
+        quantity = amount_gbp / current_price_gbp
+
+        # Round to the specified precision
+        quantity = round(quantity, precision)
+
+        return quantity
+
+    def get_pending_orders(self) -> list[dict]:
+        """
+        Fetch all currently active/unfilled orders.
+
+        Calls GET /equity/orders
+
+        Returns:
+            List of order dicts with id, ticker, quantity, status, etc.
+        """
+        response = self._request("GET", "equity/orders")
+
+        # Handle if response is a list or dict with orders key
+        orders = response if isinstance(response, list) else response.get("orders", [])
+
+        return orders
+
+    def place_market_order(self, ticker: str, quantity: float) -> dict:
+        """
+        Place a market order for a given ticker and quantity.
+
+        CRITICAL: This endpoint is NOT idempotent per T212's docs.
+        Do NOT implement retry logic — retrying could create duplicate orders.
+        Each call is a fresh order attempt.
+
+        Args:
+            ticker: T212 ticker (e.g., "IGLS_EQ", not "IGLS.L")
+            quantity: Quantity to buy (can be fractional)
+
+        Returns:
+            T212's raw response as dict. If an error occurred, the dict will have
+            an "error" key with T212's error message. No exception is raised;
+            the caller is responsible for handling errors gracefully.
+        """
+        try:
+            response = self._request(
+                "POST",
+                "equity/orders/market",
+                json={"ticker": ticker, "quantity": quantity},
+            )
+
+            # Success response
+            return response
+
+        except ValueError as e:
+            # _request raised an error, return it as an error dict
+            error_message = str(e)
+            return {"error": error_message, "ticker": ticker, "quantity": quantity}
+
+    def get_exchanges(self) -> list[dict]:
+        """
+        Fetch the list of available exchanges.
+
+        Calls GET /equity/metadata/exchanges
+
+        Returns:
+            List of exchange dicts with id, name, code, etc.
+        """
+        try:
+            response = self._request("GET", "equity/metadata/exchanges")
+            # Handle if response is a list or dict with exchanges key
+            exchanges = response if isinstance(response, list) else response.get("exchanges", [])
+            return exchanges
+        except Exception as e:
+            print(f"⚠️  Note: /equity/metadata/exchanges endpoint not available: {e}")
+            return []

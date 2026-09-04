@@ -22,7 +22,9 @@ from src.execution.telegram_notifier import (
     format_rebalance_message,
     send_message,
     wait_for_reply,
+    get_high_water_mark,
 )
+from src.logging.supabase_client import log_signal_snapshot, log_trade_decision
 from src.data.price_fetcher import fetch_price_history
 from src.signals.regime import check_regime
 from src.signals.momentum import rank_growth_assets, rank_defensive_assets, select_top_growth
@@ -88,6 +90,34 @@ try:
 except Exception as e:
     print(f"✗ Failed to run signal pipeline: {e}")
     exit(1)
+
+# Step 2b: Log signal snapshot
+print("[STEP 2b] Log signal snapshot to Supabase")
+print("-" * 100)
+
+try:
+    signal_snapshot_id = log_signal_snapshot({
+        "environment": os.getenv("ENVIRONMENT", "DEMO").upper(),
+        "check_type": "monthly",
+        "regime": regime,
+        "cspx_price": float(cspx_prices.iloc[-1]) if cspx_prices is not None else None,
+        "cspx_200ma": float(cspx_prices.rolling(200).mean().iloc[-1]) if cspx_prices is not None and len(cspx_prices) >= 200 else None,
+        "fast_crash_triggered": False,
+        "ten_day_return": None,
+        "portfolio_drawdown_pct": 0.0,
+        "circuit_breaker_triggered": False,
+        "growth_rankings": [{"ticker": t, "momentum": float(m)} for t, m in ranked_growth],
+        "defensive_rankings": [{"ticker": t, "momentum": float(m)} for t, m in ranked_defensive],
+        "selected_growth": top_growth,
+    })
+    if not signal_snapshot_id:
+        print("⚠️  Failed to log signal snapshot (continuing anyway)\n")
+    else:
+        print()
+
+except Exception as e:
+    print(f"⚠️  Error logging signal snapshot: {e}\n")
+    signal_snapshot_id = None
 
 # Step 3: Build target allocation
 print("[STEP 3] Build target allocation")
@@ -158,8 +188,21 @@ except Exception as e:
     print(f"✗ Failed to format message: {e}")
     exit(1)
 
-# Step 6: Send Telegram message
-print("[STEP 6] Send Telegram message")
+# Step 6: Get high water mark (before sending message)
+print("[STEP 6a] Get high water mark")
+print("-" * 100)
+
+try:
+    high_water_mark = get_high_water_mark()
+    print(f"✓ High water mark: update_id={high_water_mark}")
+    print("  (Only messages with update_id > this will be considered)\n")
+
+except Exception as e:
+    print(f"⚠️  Failed to get high water mark: {e}")
+    high_water_mark = 0
+
+# Step 6b: Send Telegram message
+print("[STEP 6b] Send Telegram message")
 print("-" * 100)
 
 try:
@@ -179,29 +222,78 @@ print("[STEP 7] Wait for reply (5-minute timeout)")
 print("-" * 100)
 
 try:
-    reply = wait_for_reply(timeout_seconds=300)  # 5-minute timeout for testing
+    reply_data = wait_for_reply(timeout_seconds=300, high_water_mark=high_water_mark)
 
 except Exception as e:
     print(f"✗ Error while waiting for reply: {e}")
-    reply = None
+    reply_data = None
 
 # Step 8: Handle reply
 print("\n[STEP 8] Handle reply")
 print("-" * 100)
 
-if reply == "YES":
-    print("✅ Approval received!")
-    print("   NO ORDER PLACED — this test stops here by design.")
-    print("   Order execution will be added in the next step.\n")
-    confirmation = "✅ Got it — I received your YES. No trades will be placed in test mode."
+user_response = None
+responded_at = None
 
-elif reply == "NO":
-    print("❌ Trade skipped per your response.\n")
-    confirmation = "Got it — I received your NO. No trades will be placed."
+if reply_data:
+    reply_text = reply_data.get("reply")
+    update_id = reply_data.get("update_id")
+    timestamp = reply_data.get("timestamp")
+
+    print(f"Reply details:")
+    print(f"  Reply: {reply_text}")
+    print(f"  update_id: {update_id}")
+    print(f"  timestamp: {timestamp}")
+    print()
+
+    user_response = reply_text
+    responded_at = datetime.fromtimestamp(timestamp).isoformat() if timestamp else None
+
+    if reply_text == "YES":
+        print("✅ Approval received!")
+        print("   NO ORDER PLACED — this test stops here by design.")
+        print("   Order execution will be added in the next step.\n")
+        confirmation = "✅ Got it — I received your YES. No trades will be placed in test mode."
+    elif reply_text == "NO":
+        print("❌ Trade skipped per your response.\n")
+        confirmation = "Got it — I received your NO. No trades will be placed."
+    else:
+        print("⚠️  Unexpected reply format.\n")
+        confirmation = "Got unexpected reply format."
 
 else:  # None = timeout
+    user_response = "TIMEOUT"
     print("⏱️ No reply received within 5 minutes. Trade cycle skipped.\n")
     confirmation = "⏱️ No reply received. Trade cycle skipped."
+
+# Step 8b: Log trade decision
+print("[STEP 8b] Log trade decision to Supabase")
+print("-" * 100)
+
+try:
+    if signal_snapshot_id:
+        total_buy = sum(t["amount_gbp"] for t in trades if t["action"] == "BUY")
+        total_sell = sum(t["amount_gbp"] for t in trades if t["action"] == "SELL")
+
+        trade_decision_id = log_trade_decision({
+            "signal_snapshot_id": signal_snapshot_id,
+            "environment": os.getenv("ENVIRONMENT", "DEMO").upper(),
+            "trade_list": trades,
+            "total_buy_amount": total_buy,
+            "total_sell_amount": total_sell,
+            "telegram_message_sent": telegram_message,
+            "user_response": user_response,
+            "responded_at": responded_at,
+        })
+        if not trade_decision_id:
+            print("⚠️  Failed to log trade decision (continuing anyway)\n")
+        else:
+            print()
+    else:
+        print("⚠️  No signal snapshot ID, skipping trade decision log\n")
+
+except Exception as e:
+    print(f"⚠️  Error logging trade decision: {e}\n")
 
 # Step 9: Send confirmation back
 print("[STEP 9] Send confirmation back to Telegram")
