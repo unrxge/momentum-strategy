@@ -8,10 +8,12 @@ Persistent process that stays alive and runs jobs on a schedule:
 """
 
 import os
+import sys
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from src.scheduler.jobs import weekly_job, monthly_job, heartbeat_job
 
@@ -53,7 +55,7 @@ def main():
 
     _start_health_server()
 
-    scheduler = BlockingScheduler()
+    scheduler = BackgroundScheduler()
 
     # Weekly job: Monday 09:00
     scheduler.add_job(
@@ -82,9 +84,15 @@ def main():
         replace_existing=True,
     )
 
-    # Start the scheduler (blocks indefinitely)
     try:
         scheduler.start()
+        print("Scheduler started — waiting for jobs.\n")
+        # Keep main thread alive; BackgroundScheduler runs jobs on its own threads
+        while True:
+            time.sleep(60)
+            if not scheduler.running:
+                print("Scheduler stopped unexpectedly — exiting.")
+                sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nScheduler stopped by user.")
         scheduler.shutdown()
@@ -93,7 +101,7 @@ def main():
         import traceback
         traceback.print_exc()
         scheduler.shutdown()
-        raise  # Re-raise so Railway sees a non-zero exit and restarts
+        sys.exit(1)
 
 
 if __name__ == "__main__":
