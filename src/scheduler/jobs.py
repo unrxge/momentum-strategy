@@ -387,7 +387,7 @@ def monthly_job():
 
             # Wait for reply (24 hours)
             print("⏳ Waiting for approval (24 hours)...\n")
-            reply_data = wait_for_reply(timeout_seconds=86400, high_water_mark=high_water_mark)
+            reply_data = wait_for_reply(timeout_seconds=18000, high_water_mark=high_water_mark)
 
             # Handle response
             print("[7/7] Log trade decision...")
