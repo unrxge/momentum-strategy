@@ -5,10 +5,14 @@ on:
     - cron: '0 8 * * *'   # 08:00 UTC daily
   workflow_dispatch:
 
+concurrency:
+  group: trading-account
+  cancel-in-progress: false
+
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,8 +20,16 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install -r requirements.txt
+      # Liveness row plus a daily portfolio-value, benchmark and cashflow snapshot.
+      # Read-only against the broker: it never places an order.
       - run: python -m src.jobs heartbeat
         env:
           ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+          T212_DEMO_API_KEY: ${{ secrets.T212_DEMO_API_KEY }}
+          T212_DEMO_API_SECRET: ${{ secrets.T212_DEMO_API_SECRET }}
+          T212_DEMO_BASE_URL: ${{ secrets.T212_DEMO_BASE_URL }}
+          T212_LIVE_API_KEY: ${{ secrets.T212_LIVE_API_KEY }}
+          T212_LIVE_API_SECRET: ${{ secrets.T212_LIVE_API_SECRET }}
+          T212_LIVE_BASE_URL: ${{ secrets.T212_LIVE_BASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

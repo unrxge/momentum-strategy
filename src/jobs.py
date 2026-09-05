@@ -8,7 +8,8 @@ Scheduled jobs.  Run with:
 rebalance : first trading day of the month (self-gated unless --force).  Computes signals,
             trades to target, reports to Telegram.  --dry-run does everything except place orders.
 weekly    : Monday status — what the rules see, what next month's rebalance would do, drawdown.
-heartbeat : daily liveness row in Supabase.
+heartbeat : daily liveness row plus a portfolio-value, benchmark and cashflow snapshot, so the
+            equity curve has daily resolution instead of only the monthly/weekly run days.
 """
 from __future__ import annotations
 
@@ -20,13 +21,14 @@ from datetime import date, datetime, timezone
 
 from dotenv import load_dotenv
 
-from src import notify, store
+from src import notify, store, reconcile
 from src.broker import T212, BrokerError
-from src.config import INSTRUMENTS, BY_KEY, REBALANCE_TRADING_DAY_OF_MONTH, DRAWDOWN_ALERT, ENV_KEYS
-from src.data import load_prices
+from src.config import (INSTRUMENTS, BY_KEY, REBALANCE_TRADING_DAY_OF_MONTH, DRAWDOWN_ALERT, ENV_KEYS,
+                        BENCHMARK_TICKERS)
+from src.data import load_prices, fetch_series
 from src.executor import execute
 from src.strategy import StrategyParams, compute_signals, target_weights, generate_trades, describe, CASH
-from src.trading_calendar import nth_trading_day, next_rebalance_date
+from src.trading_calendar import is_trading_day, nth_trading_day, next_rebalance_date
 
 PARAMS = StrategyParams()
 
@@ -116,8 +118,13 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
 
         decision_id = store.log_decision(snapshot_id, trades, plan, "AUTO")
         result = execute(broker, trades, last_px, decision_id)
+        fills = reconcile.reconcile(broker, result["placed"], last_px)
+        reconcile.sync_cashflows(broker)
         after = broker.snapshot()
         lines = [f"Placed: {len(result['placed'])}   Failed: {len(result['failed'])}"]
+        slip = [f["slippage_bps"] for f in fills if f.get("slippage_bps") is not None]
+        if slip:
+            lines.append(f"Fill slippage: {sum(slip) / len(slip):+.1f} bps average over {len(slip)} fill(s)")
         if result["buys_skipped"]:
             lines.append("⚠️ SELLS STILL PENDING AFTER 15 MIN — BUYS NOT PLACED. Check the T212 app; "
                          "the next weekly status will show the gap and next month's run will complete it.")
@@ -152,6 +159,7 @@ def weekly() -> int:
         _cap = float(os.getenv("MAX_CAPITAL") or 0)
         trades = generate_trades(target, positions, min(_uv, _cap) if _cap else _uv, PARAMS)
         store.log_snapshot("weekly", sig, target, dd)
+        _log_benchmark()
         nxt = next_rebalance_date(date.today(), REBALANCE_TRADING_DAY_OF_MONTH)
         body = (f"Account: {notify.fmt_gbp(snap['total'])} (cash {notify.fmt_gbp(snap['cash']['free'])})\n"
                 f"Drawdown from peak: {dd:.1%}" + ("  ⚠️ above alert level" if dd > DRAWDOWN_ALERT else "") + "\n"
@@ -166,9 +174,35 @@ def weekly() -> int:
         return 1
 
 
+def _log_benchmark() -> None:
+    """One close per benchmark per trading day, on the same dates as portfolio_value_history."""
+    for ticker in BENCHMARK_TICKERS:
+        try:
+            s = fetch_series(ticker, "GBP", min_rows=30)      # quote GBP: no division applied
+            store.log_benchmark(str(s.index[-1].date()), ticker, float(s.iloc[-1]))
+        except Exception as exc:
+            print(f"⚠️  benchmark {ticker} not logged: {exc}")
+
+
 def heartbeat() -> int:
+    """Liveness row, plus the daily equity/benchmark/cashflow snapshot the dashboard needs.
+
+    The liveness row is the only part that decides the exit code: a broker or data hiccup
+    must not make the bot look dead when it is fine."""
     rid = store.heartbeat()
     print("heartbeat", rid)
+    if not is_trading_day(date.today()):
+        print("market closed; no value snapshot")
+        return 0 if rid else 1
+    try:
+        broker = T212()
+        snap = broker.snapshot()
+        store.log_portfolio_value(snap["total"], snap["cash"]["free"], snap["invested"])
+        print(f"portfolio {snap['total']:.2f} (cash {snap['cash']['free']:.2f})")
+        reconcile.sync_cashflows(broker)
+    except Exception as exc:
+        print(f"⚠️  portfolio snapshot skipped: {exc}")
+    _log_benchmark()
     return 0 if rid else 1
 
 

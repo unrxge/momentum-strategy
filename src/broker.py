@@ -83,6 +83,25 @@ class T212:
         r = self._request("GET", "equity/orders")
         return r if isinstance(r, list) else r.get("orders", [])
 
+    # ------------------------------------------------------------ history (dashboard instrumentation)
+    def order_history(self, limit: int = 50) -> list[dict]:
+        """Executed orders with fill price and filled quantity.  Best-effort: [] on failure."""
+        try:
+            r = self._request("GET", f"equity/history/orders?limit={int(limit)}", retries=2)
+        except BrokerError as exc:
+            print(f"\u26a0\ufe0f  order history unavailable: {exc}")
+            return []
+        return r if isinstance(r, list) else (r.get("items") or [])
+
+    def transactions(self, limit: int = 50) -> list[dict]:
+        """Cash movements (deposits/withdrawals).  Best-effort: [] on failure."""
+        try:
+            r = self._request("GET", f"equity/history/transactions?limit={int(limit)}", retries=2)
+        except BrokerError as exc:
+            print(f"\u26a0\ufe0f  transaction history unavailable: {exc}")
+            return []
+        return r if isinstance(r, list) else (r.get("items") or [])
+
     # ------------------------------------------------------------ orders
     @staticmethod
     def round_quantity(amount_gbp: float, price_gbp: float) -> float:

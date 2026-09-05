@@ -57,5 +57,10 @@ SETTLEMENT_WAIT_SECONDS = 900          # poll pending orders up to 15 min betwee
 DRAWDOWN_ALERT = 0.15                  # informational alert only; nothing trades on it
 PRICE_HISTORY_DAYS = 400               # yfinance request; ~395 trading rows
 
+# Benchmarks for the dashboard's relative-performance view.  VWRL.L is the GBP-quoted
+# all-world tracker already in the universe, so that comparison needs no FX conversion;
+# ^GSPC is logged as well because it is the common yardstick across both trading systems.
+BENCHMARK_TICKERS = ("VWRL.L", "^GSPC")
+
 ENV_KEYS = ("ENVIRONMENT", "T212_DEMO_API_KEY", "T212_DEMO_API_SECRET", "T212_DEMO_BASE_URL",
             "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")

@@ -81,12 +81,55 @@ def log_decision(snapshot_id, trades: list[dict], message: str, response: str):
     return _insert("trade_decisions", payload)
 
 
-def log_order(decision_id, key: str, action: str, amount_gbp: float, order_id, status: str, error: str | None = None):
+def log_order(decision_id, key: str, action: str, amount_gbp: float, order_id, status: str,
+              error: str | None = None, intended_price_gbp: float | None = None):
     if decision_id is None:
         return None
     return _insert("executed_orders", {"trade_decision_id": decision_id, "environment": env(), "ticker": key,
                                        "action": action, "amount_gbp": float(amount_gbp), "t212_order_id": str(order_id) if order_id else None,
-                                       "status": status, "error_message": error})
+                                       "status": status, "error_message": error,
+                                       "intended_price_gbp": float(intended_price_gbp) if intended_price_gbp else None})
+
+
+def update_order_fill(order_id, fill_price_gbp: float, filled_quantity: float,
+                      fill_value_gbp: float | None, filled_at, slippage_bps: float | None):
+    """Attach the broker's fill detail to an executed_orders row.  Best-effort."""
+    if not order_id:
+        return None
+    payload = _clean({"fill_price_gbp": fill_price_gbp, "filled_quantity": filled_quantity,
+                      "fill_value_gbp": fill_value_gbp, "filled_at": filled_at,
+                      "slippage_bps": slippage_bps, "status": "filled"})
+    try:
+        _client().table("executed_orders").update(payload).eq("t212_order_id", str(order_id)).execute()
+        return True
+    except Exception as exc:
+        print(f"\u2717 executed_orders fill update: {exc}")
+        return None
+
+
+def log_benchmark(as_of, ticker: str, close: float):
+    """One close per day per ticker; upsert so a re-run cannot duplicate."""
+    try:
+        _client().table("benchmark_history").upsert(
+            _clean({"as_of": as_of, "ticker": ticker, "close": float(close)}),
+            on_conflict="as_of,ticker").execute()
+        return True
+    except Exception as exc:
+        print(f"\u2717 benchmark_history: {exc}")
+        return None
+
+
+def log_cashflows(rows: list[dict]) -> int:
+    """rows: {external_id, occurred_at, kind, amount_gbp, raw}.  Upsert on (environment, external_id)."""
+    if not rows:
+        return 0
+    payload = [_clean({**r, "environment": env()}) for r in rows]
+    try:
+        _client().table("cashflows").upsert(payload, on_conflict="environment,external_id").execute()
+        return len(payload)
+    except Exception as exc:
+        print(f"\u2717 cashflows: {exc}")
+        return 0
 
 
 def log_portfolio_value(total: float, cash: float, invested: float):

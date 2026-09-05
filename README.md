@@ -26,12 +26,14 @@ src/            runtime package (what GitHub Actions runs)
   executor.py     sells → wait → buys
   jobs.py         rebalance / weekly / heartbeat entry points
   notify.py       Telegram        store.py  Supabase audit log
+  reconcile.py    matches placed orders to the broker's fills → slippage; syncs cash movements
 backtest/       replay engine using the same strategy functions (python -m backtest.run --all)
 tests/          unit tests (python -m pytest -q)
 tools/          verify_t212_instruments.py — check the universe against T212 metadata
 docs/           STRATEGY.md (rules, evidence), ANALYSIS_v1.md (audit of the previous version)
 sql/            Supabase schema
-.github/workflows/  rebalance (weekdays 09:30 UTC, acts on the 1st trading day), weekly_status (Mon), heartbeat (daily)
+.github/workflows/  rebalance (weekdays 09:30 UTC, acts on the 1st trading day), weekly_status (Mon),
+                    heartbeat (daily — liveness plus the equity/benchmark/cashflow snapshot)
 ```
 
 ## Running
@@ -52,3 +54,11 @@ In GitHub, the same secrets are configured as repository secrets. `ENVIRONMENT=d
 - Monthly (first trading day): what the rules see, the trades placed, positions after.
 - Monday: weekly status — positions, drawdown, what a rebalance would do today, next rebalance date.
 - Any failure (data-quality gate, broker error, pending orders) is reported and the job stops without trading.
+
+## Instrumentation
+
+`sql/migration_001_dashboard.sql` adds fill detail to `executed_orders` plus the
+`benchmark_history` and `cashflows` tables — run it once in the Supabase SQL editor.  The daily
+heartbeat then records portfolio value, a benchmark close and any cash movement on every trading
+day, so the equity curve, drawdown and benchmark comparison have daily resolution instead of only
+the monthly run days.

@@ -47,15 +47,18 @@ def execute(broker: T212, trades: list[dict], prices_gbp: dict[str, float], deci
         key = t["key"]
         t212 = BY_KEY[key].t212
         signed = -abs(qty) if t["action"] == "SELL" else abs(qty)
+        intended = prices_gbp.get(key)      # the price the sizing assumed; fills are measured against it
         try:
             resp = broker.market_order(t212, signed)
             oid = resp.get("id") if isinstance(resp, dict) else None
             print(f"  ✓ {t['action']} {key} qty={signed} → order {oid}")
-            store.log_order(decision_id, key, t["action"], t["amount_gbp"], oid, "submitted")
-            placed.append({**t, "quantity": signed, "order_id": oid})
+            store.log_order(decision_id, key, t["action"], t["amount_gbp"], oid, "submitted",
+                            intended_price_gbp=intended)
+            placed.append({**t, "quantity": signed, "order_id": oid, "intended_price_gbp": intended})
         except BrokerError as exc:
             print(f"  ✗ {t['action']} {key} qty={signed}: {exc}")
-            store.log_order(decision_id, key, t["action"], t["amount_gbp"], None, "failed", str(exc))
+            store.log_order(decision_id, key, t["action"], t["amount_gbp"], None, "failed", str(exc),
+                            intended_price_gbp=intended)
             failed.append({**t, "quantity": signed, "error": str(exc)})
         time.sleep(pace_seconds)
 
