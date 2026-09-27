@@ -204,3 +204,27 @@ def describe(sig: Signals, target: dict[str, float], params: StrategyParams) -> 
         lines.append(f"Switched-off equity capital → {sig.fallback_asset}" + (" / cash" if params.fallback == "split" and sig.fallback_asset != CASH else ""))
     lines.append("Target: " + ", ".join(f"{k} {v:.0%}" for k, v in target.items() if v > 0.001))
     return "\n".join(lines)
+
+
+def explain(sig: Signals, target: dict[str, float], params: StrategyParams) -> str:
+    """Plain-English version of describe() for Telegram."""
+    from src.config import BY_KEY
+    nm = lambda k: BY_KEY[k].name if k in BY_KEY else ("cash" if k == CASH else k)
+    lines = [f"How the bot decides (prices up to {sig.date}):",
+             f"It holds the {params.top_n} strongest stock funds, but only while each is in an uptrend "
+             "(price above its 10-month average). Gold and UK government bonds are always held as a cushion.",
+             "", "Stock funds — past-year gain · trend:"]
+    for k in sorted(params.equities, key=lambda x: sig.mom[x], reverse=True):
+        held = "  ✅ held" if k in sig.selected_equity else ""
+        trend = "📈 rising" if sig.trend_on[k] else "📉 falling"
+        lines.append(f"  • {nm(k)}: {sig.mom[k]:+.0%} · {trend} ({sig.sma_ratio[k]:+.0%} vs average){held}")
+    lines.append("Safety assets — past-6-month gain · trend:")
+    for k in params.defensives:
+        trend = "📈 rising" if sig.trend_on[k] else "📉 falling"
+        lines.append(f"  • {nm(k)}: {sig.def_mom[k]:+.0%} · {trend}")
+    if len(sig.selected_equity) < params.top_n:
+        dest = nm(sig.fallback_asset) + (" and cash" if params.fallback == "split" and sig.fallback_asset != CASH else "")
+        lines.append(f"⚠️ Not enough stock funds are rising, so part of the money is parked in {dest} for safety.")
+    lines.append("")
+    lines.append("Target mix: " + ", ".join(f"{nm(k)} {v:.0%}" for k, v in target.items() if v > 0.001))
+    return "\n".join(lines)

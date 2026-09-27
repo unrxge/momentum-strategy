@@ -27,7 +27,7 @@ from src.config import (INSTRUMENTS, BY_KEY, REBALANCE_TRADING_DAY_OF_MONTH, DRA
                         BENCHMARK_TICKERS)
 from src.data import load_prices, fetch_series
 from src.executor import execute
-from src.strategy import StrategyParams, compute_signals, target_weights, generate_trades, describe, CASH
+from src.strategy import StrategyParams, compute_signals, target_weights, generate_trades, describe, explain, CASH
 from src.trading_calendar import is_trading_day, nth_trading_day, next_rebalance_date
 
 PARAMS = StrategyParams()
@@ -119,9 +119,9 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
         dd = store.drawdown(history)
         snapshot_id = store.log_snapshot("monthly", sig, target, dd, {"dry_run": dry_run, "forced": force})
 
-        plan = (f"Account: {notify.fmt_gbp(snap['total'])} (cash {notify.fmt_gbp(snap['cash']['free'])})\n"
-                f"Drawdown from peak: {dd:.1%}" + ("  ⚠️ above alert level" if dd > DRAWDOWN_ALERT else "") + "\n\n"
-                + describe(sig, target, PARAMS) + "\n\nTrades:\n" + notify.trades_block(trades))
+        plan = (f"Account value: {notify.fmt_gbp(snap['total'])} (of which uninvested cash {notify.fmt_gbp(snap['cash']['free'])})\n"
+                + notify.drawdown_line(dd, DRAWDOWN_ALERT) + "\n\n"
+                + explain(sig, target, PARAMS) + "\n\nTrades:\n" + notify.trades_block(trades))
         if dry_run:
             msg = notify.header(_env(), "🧪 DRY RUN — no orders placed") + f"{_now()}\n\n" + plan
             notify.send(msg)
@@ -129,7 +129,7 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
             print(plan)
             return 0
         if not trades:
-            msg = notify.header(_env(), "✅ MONTHLY REBALANCE — nothing to trade") + f"{_now()}\n\n" + plan
+            msg = notify.header(_env(), "✅ MONTHLY CHECK-UP — no changes needed") + f"{_now()}\n\n" + plan
             notify.send(msg)
             store.log_decision(snapshot_id, [], msg, "NO_TRADES")
             return 0
@@ -139,19 +139,19 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
         fills = reconcile.reconcile(broker, result["placed"], last_px)
         reconcile.sync_cashflows(broker)
         after = broker.snapshot()
-        lines = [f"Placed: {len(result['placed'])}   Failed: {len(result['failed'])}"]
+        lines = [f"Orders sent: {len(result['placed'])}   Failed: {len(result['failed'])}"]
         slip = [f["slippage_bps"] for f in fills if f.get("slippage_bps") is not None]
         if slip:
-            lines.append(f"Fill slippage: {sum(slip) / len(slip):+.1f} bps average over {len(slip)} fill(s)")
+            lines.append(notify.slippage_line(sum(slip) / len(slip), len(slip)))
         if result["buys_skipped"]:
             lines.append("⚠️ SELLS STILL PENDING AFTER 15 MIN — BUYS NOT PLACED. Check the T212 app; "
                          "the next weekly status will show the gap and next month's run will complete it.")
         for f in result["failed"]:
             lines.append(f"  ✗ {f['action']} {f['key']}: {f.get('error')}")
         after_total, after_universe, after_positions = _managed_equity(after)
-        lines.append("\nPositions after:\n" + notify.positions_block(after_positions, after_total))
-        lines.append(f"Cash: {notify.fmt_gbp(after['cash']['free'])}   Total: {notify.fmt_gbp(after_total)}")
-        title = "✅ MONTHLY REBALANCE EXECUTED" if not result["failed"] and not result["buys_skipped"] else "⚠️ MONTHLY REBALANCE — ATTENTION"
+        lines.append("\nWhat you own now:\n" + notify.positions_block(after_positions, after_total))
+        lines.append(f"Uninvested cash: {notify.fmt_gbp(after['cash']['free'])}   Total value: {notify.fmt_gbp(after_total)}")
+        title = "✅ MONTHLY CHECK-UP — trades done" if not result["failed"] and not result["buys_skipped"] else "⚠️ MONTHLY CHECK-UP — needs a look"
         notify.send(notify.header(_env(), title) + f"{_now()}\n\n" + plan + "\n\n" + "\n".join(lines))
         store.log_portfolio_value(after_total, after["cash"]["free"], after_universe, after_positions)
         return 0 if not result["failed"] else 1
@@ -179,13 +179,13 @@ def weekly() -> int:
         store.log_snapshot("weekly", sig, target, dd)
         _log_benchmark()
         nxt = next_rebalance_date(date.today(), REBALANCE_TRADING_DAY_OF_MONTH)
-        body = (f"Account: {notify.fmt_gbp(snap['total'])} (cash {notify.fmt_gbp(snap['cash']['free'])})\n"
-                f"Drawdown from peak: {dd:.1%}" + ("  ⚠️ above alert level" if dd > DRAWDOWN_ALERT else "") + "\n"
-                f"Positions:\n{notify.positions_block(positions, snap['total'])}\n\n"
-                + describe(sig, target, PARAMS)
-                + f"\n\nIf the rebalance ran today it would:\n{notify.trades_block(trades)}\n"
-                f"Next rebalance: {nxt}")
-        notify.send(notify.header(_env(), "📊 WEEKLY STATUS") + f"{_now()}\n\n" + body)
+        body = (f"Account value: {notify.fmt_gbp(snap['total'])} (of which uninvested cash {notify.fmt_gbp(snap['cash']['free'])})\n"
+                + notify.drawdown_line(dd, DRAWDOWN_ALERT) + "\n\n"
+                f"What you own:\n{notify.positions_block(positions, snap['total'])}\n\n"
+                + explain(sig, target, PARAMS)
+                + f"\n\nIf the monthly rebalance ran today it would:\n{notify.trades_block(trades)}\n"
+                f"Next monthly check-up (when trades can happen): {nxt}")
+        notify.send(notify.header(_env(), "📊 WEEKLY UPDATE — just information, nothing traded") + f"{_now()}\n\n" + body)
         return 0
     except Exception as exc:
         _alert("❌ WEEKLY STATUS FAILED", f"{exc}")
