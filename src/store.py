@@ -132,9 +132,16 @@ def log_cashflows(rows: list[dict]) -> int:
         return 0
 
 
-def log_portfolio_value(total: float, cash: float, invested: float):
-    return _insert("portfolio_value_history", {"environment": env(), "total_value_gbp": float(total),
-                                               "cash_gbp": float(cash), "invested_gbp": float(invested)})
+def log_portfolio_value(total: float, cash: float, invested: float, positions: dict | None = None):
+    """positions: {key: {quantity, price_gbp, value}} — what was held when the value was taken."""
+    base = {"environment": env(), "total_value_gbp": float(total),
+            "cash_gbp": float(cash), "invested_gbp": float(invested)}
+    if positions is not None:
+        row_id = _insert("portfolio_value_history", {**base, "positions": positions})
+        if row_id is not None:
+            return row_id
+        # positions column may not exist yet (migration pending); retry without it
+    return _insert("portfolio_value_history", base)
 
 
 def heartbeat():

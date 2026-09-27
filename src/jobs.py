@@ -60,9 +60,27 @@ def _signals_and_targets():
     return sig, target, last_px
 
 
+def _universe_positions(snap: dict) -> dict:
+    return {k: {"quantity": v["quantity"], "price_gbp": v["price_gbp"], "value": v["value"]}
+            for k, v in snap["positions"].items() if not k.startswith("OTHER:")}
+
+
+def _managed_equity(snap: dict) -> tuple[float, float, dict]:
+    """Return (total, universe_value, positions) for the universe slice of the account only.
+
+    Both bots share the same demo account.  snap["total"] and snap["invested"] include the
+    leveraged-trend bot's OTHER: positions.  We measure only what this bot manages: its own
+    universe positions + the remaining free cash.
+    """
+    positions = _universe_positions(snap)
+    universe_value = sum(v["value"] for v in positions.values())
+    return universe_value + snap["cash"]["free"], universe_value, positions
+
+
 def _snapshot(broker: T212) -> dict:
     snap = broker.snapshot()
-    store.log_portfolio_value(snap["total"], snap["cash"]["free"], snap["invested"])
+    total, universe_value, positions = _managed_equity(snap)
+    store.log_portfolio_value(total, snap["cash"]["free"], universe_value, positions)
     return snap
 
 
@@ -130,12 +148,12 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
                          "the next weekly status will show the gap and next month's run will complete it.")
         for f in result["failed"]:
             lines.append(f"  ✗ {f['action']} {f['key']}: {f.get('error')}")
-        lines.append("\nPositions after:\n" + notify.positions_block(
-            {k: v for k, v in after["positions"].items() if not k.startswith("OTHER:")}, after["total"]))
-        lines.append(f"Cash: {notify.fmt_gbp(after['cash']['free'])}   Total: {notify.fmt_gbp(after['total'])}")
+        after_total, after_universe, after_positions = _managed_equity(after)
+        lines.append("\nPositions after:\n" + notify.positions_block(after_positions, after_total))
+        lines.append(f"Cash: {notify.fmt_gbp(after['cash']['free'])}   Total: {notify.fmt_gbp(after_total)}")
         title = "✅ MONTHLY REBALANCE EXECUTED" if not result["failed"] and not result["buys_skipped"] else "⚠️ MONTHLY REBALANCE — ATTENTION"
         notify.send(notify.header(_env(), title) + f"{_now()}\n\n" + plan + "\n\n" + "\n".join(lines))
-        store.log_portfolio_value(after["total"], after["cash"]["free"], after["invested"])
+        store.log_portfolio_value(after_total, after["cash"]["free"], after_universe, after_positions)
         return 0 if not result["failed"] else 1
     except (BrokerError, RuntimeError, ValueError) as exc:
         _alert("❌ REBALANCE ABORTED", str(exc))
@@ -197,8 +215,9 @@ def heartbeat() -> int:
     try:
         broker = T212()
         snap = broker.snapshot()
-        store.log_portfolio_value(snap["total"], snap["cash"]["free"], snap["invested"])
-        print(f"portfolio {snap['total']:.2f} (cash {snap['cash']['free']:.2f})")
+        total, universe_value, positions = _managed_equity(snap)
+        store.log_portfolio_value(total, snap["cash"]["free"], universe_value, positions)
+        print(f"portfolio {total:.2f} (invested {universe_value:.2f} cash {snap['cash']['free']:.2f})")
         reconcile.sync_cashflows(broker)
     except Exception as exc:
         print(f"⚠️  portfolio snapshot skipped: {exc}")

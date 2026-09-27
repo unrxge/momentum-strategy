@@ -4,6 +4,23 @@
 -- Adds (a) fill detail on executed_orders so slippage and real cost drag are measurable,
 --      (b) a benchmark close series so live return can be compared like for like,
 --      (c) a cashflow log so deposits/withdrawals do not read as strategy return.
+--
+-- Also removes the inflated portfolio_value_history rows recorded between 2026-09-07 and
+-- 2026-09-25.  During that period the heartbeat was calling broker.snapshot()["total"] which
+-- includes the leveraged-trend bot's positions (both bots share the demo account).  Those rows
+-- overstate the momentum bot's equity by ~£1,500 and must be dropped before the equity curve
+-- makes sense.  The 2026-09-04 row (£5,000 before leveraged-trend had any positions) is kept
+-- as the starting point.
+DELETE FROM portfolio_value_history
+WHERE environment = 'DEMO'
+  AND created_at >= '2026-09-07';
+-- After running this migration, deploy the jobs.py fix (uses universe-positions + free cash
+-- instead of the full account total) and wait for the next heartbeat to log the correct value.
+
+-- Per-instrument holdings at each snapshot: the value history recorded totals only, so the
+-- dashboard had no way to show what was actually held between rebalances.
+ALTER TABLE portfolio_value_history
+    ADD COLUMN IF NOT EXISTS positions JSONB;
 
 ALTER TABLE executed_orders
     ADD COLUMN IF NOT EXISTS intended_price_gbp NUMERIC,
