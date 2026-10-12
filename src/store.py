@@ -81,6 +81,31 @@ def log_decision(snapshot_id, trades: list[dict], message: str, response: str):
     return _insert("trade_decisions", payload)
 
 
+def rebalance_done(year: int, month: int) -> bool | None:
+    """Did a rebalance complete in this month?  None if the audit log cannot be read.
+
+    Complete means a run found nothing to trade, or every trade it planned was accepted by the
+    broker.  A plan with a trade missing (sells went, buys did not) is not complete."""
+    start = f"{year:04d}-{month:02d}-01T00:00:00+00:00"
+    ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
+    end = f"{ny:04d}-{nm:02d}-01T00:00:00+00:00"
+    try:
+        decisions = (_client().table("trade_decisions").select("id,trade_list,user_response,created_at")
+                     .eq("environment", env()).gte("created_at", start).lt("created_at", end)
+                     .in_("user_response", ["AUTO", "NO_TRADES"]).order("created_at", desc=True).execute().data or [])
+        if not decisions:
+            return False
+        latest = decisions[0]              # the newest plan is the one that has to have been carried out
+        if latest["user_response"] == "NO_TRADES":
+            return True
+        placed = (_client().table("executed_orders").select("id").eq("trade_decision_id", latest["id"])
+                  .eq("status", "submitted").execute().data or [])
+        return len(placed) >= len(latest.get("trade_list") or [])
+    except Exception as exc:
+        print(f"✗ rebalance_done: {exc}")
+        return None
+
+
 def log_order(decision_id, key: str, action: str, amount_gbp: float, order_id, status: str,
               error: str | None = None, intended_price_gbp: float | None = None):
     if decision_id is None:

@@ -7,6 +7,7 @@ instrument's quote unit from config (GBX ÷ 100) — no metadata call at runtime
 from __future__ import annotations
 
 import base64
+import itertools
 import math
 import os
 import time
@@ -58,8 +59,12 @@ class T212:
     # ------------------------------------------------------------ account
     def cash(self) -> dict:
         r = self._request("GET", "equity/account/cash")
-        return {"free": float(r.get("free", 0)), "total": float(r.get("total", 0)),
-                "invested": float(r.get("invested", 0)), "blocked": float(r.get("blocked", 0)), "raw": r}
+        f = lambda k: float(r.get(k) or 0)
+        # invested is cost basis and ppl the unrealised gain on it, so invested + ppl is what
+        # the holdings are worth now — the figure the T212 app shows as "Investments".
+        return {"free": f("free"), "total": f("total"), "invested": f("invested"), "ppl": f("ppl"),
+                "result": f("result"), "blocked": f("blocked"), "holdings_value": f("invested") + f("ppl"),
+                "raw": r}
 
     def positions(self) -> dict[str, dict]:
         """{instrument key: {quantity, price_gbp, value, t212}} for universe holdings; others under 'OTHER:<ticker>'."""
@@ -117,7 +122,34 @@ class T212:
         return self._request("POST", "equity/orders/market", retries=2, json=body)
 
     def snapshot(self) -> dict:
+        """The account as Trading 212 itself reports it.
+
+        total and invested are T212's own figures, not a price x quantity sum of ours, so they
+        match the app to the penny.  Our per-position values are reconciled against them."""
         c = self.cash()
         pos = self.positions()
-        invested = sum(v["value"] for v in pos.values())
-        return {"cash": c, "positions": pos, "invested": invested, "total": c["free"] + invested}
+        residual = resolve_other_units(pos, c["holdings_value"])
+        recomputed = sum(v["value"] for v in pos.values())
+        return {"cash": c, "positions": pos, "invested": c["holdings_value"],
+                "total": c["total"] or (c["free"] + recomputed),
+                "recomputed_invested": recomputed, "reconcile_residual": residual}
+
+
+def resolve_other_units(positions: dict, holdings_value: float) -> float:
+    """Decide pence or pounds for holdings outside this bot's universe; return the residual.
+
+    T212 quotes most London lines in pence and a few in pounds.  The universe's units are in
+    config; for anything else (the other bot's holdings on a shared account) they are not, and
+    reading pence as pounds overstates a holding a hundredfold.  T212's own valuation of all
+    holdings settles it: pick the units under which our position values add up to it."""
+    other = [k for k in positions if k.startswith("OTHER:")]
+    if not other or len(other) > 10 or holdings_value <= 0:
+        return abs(sum(v["value"] for v in positions.values()) - holdings_value)
+    known = sum(v["value"] for k, v in positions.items() if k not in other)
+    raw = [positions[k]["quantity"] * positions[k]["price_gbp"] for k in other]
+    best = min(itertools.product((0.01, 1.0), repeat=len(other)),
+               key=lambda u: abs(known + sum(a * b for a, b in zip(u, raw)) - holdings_value))
+    for k, unit in zip(other, best):
+        positions[k]["price_gbp"] *= unit
+        positions[k]["value"] = positions[k]["quantity"] * positions[k]["price_gbp"]
+    return abs(sum(v["value"] for v in positions.values()) - holdings_value)

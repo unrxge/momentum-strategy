@@ -1,7 +1,7 @@
 """Trading-day helpers: a day counts only if both LSE and NYSE are open."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 
 import pandas_market_calendars as mcal
@@ -39,3 +39,24 @@ def next_rebalance_date(today: date, n: int = 1) -> date:
         return rd
     y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
     return nth_trading_day(y, m, n)
+
+
+def minutes_to_close(now: datetime | None = None) -> float | None:
+    """Minutes until the London market closes, or None if it is not open right now."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        day = mcal.get_calendar("LSE").schedule(str(now.date()), str(now.date()))
+        if day.empty:
+            return None
+        opens, closes = day.iloc[0]["market_open"].to_pydatetime(), day.iloc[0]["market_close"].to_pydatetime()
+    except Exception as exc:                       # calendar failure: assume the usual 08:00-16:30 London day
+        print(f"⚠️  calendar error {exc}; assuming standard London hours")
+        from zoneinfo import ZoneInfo
+        local = now.astimezone(ZoneInfo("Europe/London"))
+        if local.weekday() >= 5:
+            return None
+        opens = local.replace(hour=8, minute=0, second=0, microsecond=0)
+        closes = local.replace(hour=16, minute=30, second=0, microsecond=0)
+    if not opens <= now <= closes:
+        return None
+    return (closes - now).total_seconds() / 60.0

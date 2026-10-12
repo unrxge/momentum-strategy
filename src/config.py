@@ -54,6 +54,10 @@ QUANTITY_DP = 2
 # yesterday's close, available either way.  09:30 is after the opening auction on both.
 REBALANCE_TRADING_DAY_OF_MONTH = 1     # first trading day where LSE and NYSE are both open
 SETTLEMENT_WAIT_SECONDS = 900          # poll pending orders up to 15 min between sells and buys
+# A rebalance needs the market open for the sells to fill and the buys to follow them.  GitHub
+# starts scheduled runs hours late; one that began after the close left a sell queued overnight
+# and the buys unplaced (2026-10-01).  A run with less than this left does not start trading.
+MIN_MINUTES_BEFORE_CLOSE = 30
 DRAWDOWN_ALERT = 0.15                  # informational alert only; nothing trades on it
 PRICE_HISTORY_DAYS = 400               # yfinance request; ~395 trading rows
 

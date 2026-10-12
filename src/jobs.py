@@ -23,12 +23,12 @@ from dotenv import load_dotenv
 
 from src import notify, store, reconcile
 from src.broker import T212, BrokerError
-from src.config import (INSTRUMENTS, BY_KEY, REBALANCE_TRADING_DAY_OF_MONTH, DRAWDOWN_ALERT, ENV_KEYS,
+from src.config import (MIN_MINUTES_BEFORE_CLOSE, INSTRUMENTS, BY_KEY, REBALANCE_TRADING_DAY_OF_MONTH, DRAWDOWN_ALERT, ENV_KEYS,
                         BENCHMARK_TICKERS)
 from src.data import load_prices, fetch_series
 from src.executor import execute
 from src.strategy import StrategyParams, compute_signals, target_weights, generate_trades, describe, explain, CASH
-from src.trading_calendar import is_trading_day, nth_trading_day, next_rebalance_date
+from src.trading_calendar import is_trading_day, nth_trading_day, next_rebalance_date, minutes_to_close
 
 PARAMS = StrategyParams()
 
@@ -61,26 +61,28 @@ def _signals_and_targets():
 
 
 def _universe_positions(snap: dict) -> dict:
-    return {k: {"quantity": v["quantity"], "price_gbp": v["price_gbp"], "value": v["value"]}
-            for k, v in snap["positions"].items() if not k.startswith("OTHER:")}
+    return {k: v for k, v in snap["positions"].items() if not k.startswith("OTHER:")}
 
 
-def _managed_equity(snap: dict) -> tuple[float, float, dict]:
-    """Return (total, universe_value, positions) for the universe slice of the account only.
+def _log_account(snap: dict):
+    """Record the account exactly as Trading 212 reports it.
 
-    Both bots share the same demo account.  snap["total"] and snap["invested"] include the
-    leveraged-trend bot's OTHER: positions.  We measure only what this bot manages: its own
-    universe positions + the remaining free cash.
-    """
-    positions = _universe_positions(snap)
-    universe_value = sum(v["value"] for v in positions.values())
-    return universe_value + snap["cash"]["free"], universe_value, positions
+    total, cash and holdings value are T212's own numbers, so the dashboard shows what the
+    app shows.  Every holding is kept, including ones this bot does not manage (another bot
+    on the same account, filed under OTHER:<ticker>), because the account total includes them."""
+    c = snap["cash"]
+    detail = {k: {"quantity": v["quantity"], "price_gbp": v["price_gbp"], "value": v["value"]}
+              for k, v in snap["positions"].items()}
+    detail["_account"] = {"total": snap["total"], "free": c["free"], "holdings_value": c["holdings_value"],
+                          "cost_basis": c["invested"], "unrealised_pl": c["ppl"], "realised_pl": c["result"],
+                          "blocked": c["blocked"], "reconcile_residual": round(snap["reconcile_residual"], 2),
+                          "source": "Trading 212 equity/account/cash"}
+    return store.log_portfolio_value(snap["total"], c["free"], snap["invested"], detail)
 
 
 def _snapshot(broker: T212) -> dict:
     snap = broker.snapshot()
-    total, universe_value, positions = _managed_equity(snap)
-    store.log_portfolio_value(total, snap["cash"]["free"], universe_value, positions)
+    _log_account(snap)
     return snap
 
 
@@ -93,9 +95,30 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
         return 2
     today = date.today()
     due = nth_trading_day(today.year, today.month, REBALANCE_TRADING_DAY_OF_MONTH)
-    if today != due and not force:
-        print(f"not the rebalance day (due {due}); nothing to do")
-        return 0
+    if not force:
+        if today < due or not is_trading_day(today):
+            print(f"not yet the rebalance day (due {due}); nothing to do")
+            return 0
+        # A rebalance that was cut off (sells placed, buys not) or never started must be
+        # finished on the next trading day, not left until next month with the money in cash.
+        done = store.rebalance_done(today.year, today.month)
+        if done:
+            print(f"this month's rebalance (due {due}) is already complete; nothing to do")
+            return 0
+        if today != due and done is None:
+            print("cannot confirm whether this month's rebalance completed; not trading blind")
+            return 0
+        if today != due:
+            print(f"this month's rebalance (due {due}) did not complete; finishing it now")
+        left = minutes_to_close()
+        if not dry_run and (left is None or left < MIN_MINUTES_BEFORE_CLOSE):
+            when = "the London market is closed" if left is None else f"only {left:.0f} minutes of trading are left"
+            print(f"rebalance is due but {when}; leaving it for the next run")
+            _alert("⏳ REBALANCE DUE — NOT STARTED", f"This run started while {when}, so no orders were sent "
+                   "(an order sent now would sit unfilled and the rest of the plan would be skipped).\n"
+                   "The next run during market hours will do it. If you keep seeing this, the scheduled "
+                   "runs are arriving too late in the day.")
+            return 0
     try:
         broker = T212()
         snap = _snapshot(broker)
@@ -148,12 +171,11 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
                          "the next weekly status will show the gap and next month's run will complete it.")
         for f in result["failed"]:
             lines.append(f"  ✗ {f['action']} {f['key']}: {f.get('error')}")
-        after_total, after_universe, after_positions = _managed_equity(after)
-        lines.append("\nWhat you own now:\n" + notify.positions_block(after_positions, after_total))
-        lines.append(f"Uninvested cash: {notify.fmt_gbp(after['cash']['free'])}   Total value: {notify.fmt_gbp(after_total)}")
+        lines.append("\nWhat you own now:\n" + notify.positions_block(_universe_positions(after), after["total"]))
+        lines.append(f"Uninvested cash: {notify.fmt_gbp(after['cash']['free'])}   Total value: {notify.fmt_gbp(after['total'])}")
         title = "✅ MONTHLY CHECK-UP — trades done" if not result["failed"] and not result["buys_skipped"] else "⚠️ MONTHLY CHECK-UP — needs a look"
         notify.send(notify.header(_env(), title) + f"{_now()}\n\n" + plan + "\n\n" + "\n".join(lines))
-        store.log_portfolio_value(after_total, after["cash"]["free"], after_universe, after_positions)
+        _log_account(after)
         return 0 if not result["failed"] else 1
     except (BrokerError, RuntimeError, ValueError) as exc:
         _alert("❌ REBALANCE ABORTED", str(exc))
@@ -215,9 +237,9 @@ def heartbeat() -> int:
     try:
         broker = T212()
         snap = broker.snapshot()
-        total, universe_value, positions = _managed_equity(snap)
-        store.log_portfolio_value(total, snap["cash"]["free"], universe_value, positions)
-        print(f"portfolio {total:.2f} (invested {universe_value:.2f} cash {snap['cash']['free']:.2f})")
+        _log_account(snap)
+        print(f"account {snap['total']:.2f} = holdings {snap['invested']:.2f} + cash {snap['cash']['free']:.2f} "
+              f"(reconciled to within {snap['reconcile_residual']:.2f})")
         reconcile.sync_cashflows(broker)
     except Exception as exc:
         print(f"⚠️  portfolio snapshot skipped: {exc}")

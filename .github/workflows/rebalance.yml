@@ -2,7 +2,11 @@ name: Monthly Rebalance
 
 on:
   schedule:
-    - cron: '30 9 * * 1-5'   # every weekday 09:30 UTC; the job itself only acts on the 1st trading day
+    # Every half hour through the London day.  GitHub starts scheduled runs hours late and drops
+    # most of them, so one firing a day cannot be relied on to land while the market is open.
+    # The job is idempotent: it acts only if this month's rebalance is due and not yet complete,
+    # and only with enough of the session left to finish.
+    - cron: '5,35 7-16 * * 1-5'
   workflow_dispatch:
     inputs:
       force:
