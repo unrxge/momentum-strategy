@@ -167,8 +167,7 @@ def rebalance(dry_run: bool = False, force: bool = False) -> int:
         if slip:
             lines.append(notify.slippage_line(sum(slip) / len(slip), len(slip)))
         if result["buys_skipped"]:
-            lines.append("⚠️ SELLS STILL PENDING AFTER 15 MIN — BUYS NOT PLACED. Check the T212 app; "
-                         "the next weekly status will show the gap and next month's run will complete it.")
+            lines.append("⚠️ SELLS STILL PENDING AFTER WAIT — BUYS NOT PLACED. Check the T212 app.")
         for f in result["failed"]:
             lines.append(f"  ✗ {f['action']} {f['key']}: {f.get('error')}")
         lines.append("\nWhat you own now:\n" + notify.positions_block(_universe_positions(after), after["total"]))

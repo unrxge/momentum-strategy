@@ -15,6 +15,7 @@ from src import store
 
 
 def wait_for_clear(broker: T212, max_wait: int = SETTLEMENT_WAIT_SECONDS, poll: int = 15) -> bool:
+    """Poll until pending orders clear.  If still pending at max_wait, cancel them and return True."""
     waited = 0
     while True:
         try:
@@ -25,7 +26,14 @@ def wait_for_clear(broker: T212, max_wait: int = SETTLEMENT_WAIT_SECONDS, poll: 
         if not pending:
             return True
         if waited >= max_wait:
-            return False
+            print(f"⏸️  {len(pending)} order(s) still pending after {waited}s — cancelling and proceeding")
+            for o in pending:
+                oid = o.get("id")
+                if oid:
+                    cancelled = broker.cancel_order(oid)
+                    print(f"  {'cancelled' if cancelled else 'already gone'}: order {oid}")
+            time.sleep(5)
+            return True
         time.sleep(poll)
         waited += poll
         print(f"  … {len(pending)} order(s) still pending after {waited}s")

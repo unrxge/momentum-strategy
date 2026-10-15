@@ -121,6 +121,16 @@ class T212:
         body = {"ticker": t212_ticker, "quantity": round(quantity, QUANTITY_DP)}
         return self._request("POST", "equity/orders/market", retries=2, json=body)
 
+    def cancel_order(self, order_id) -> bool:
+        """Cancel a pending order by id.  Returns True if cancelled, False if already gone."""
+        try:
+            self._request("DELETE", f"equity/orders/{order_id}")
+            return True
+        except BrokerError as exc:
+            if "404" in str(exc) or "410" in str(exc):
+                return False
+            raise
+
     def snapshot(self) -> dict:
         """The account as Trading 212 itself reports it.
 
