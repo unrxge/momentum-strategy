@@ -56,3 +56,7 @@ CREATE TABLE IF NOT EXISTS cashflows (
     UNIQUE (environment, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_cashflows_occurred_at ON cashflows(occurred_at DESC);
+
+-- Data API access for the tables created above (Supabase stops auto-granting on 2026-10-30).
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.benchmark_history TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.cashflows         TO service_role;

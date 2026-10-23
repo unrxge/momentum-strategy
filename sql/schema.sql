@@ -86,3 +86,11 @@ CREATE TABLE heartbeat (
 );
 
 CREATE INDEX idx_heartbeat_created_at ON heartbeat(created_at DESC);
+
+-- Data API access: Supabase no longer auto-grants new public tables (from 2026-10-30).
+-- Only the bot's service key touches these tables; anon/authenticated get nothing.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.signal_snapshots       TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.trade_decisions        TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.executed_orders        TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.portfolio_value_history TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.heartbeat              TO service_role;
